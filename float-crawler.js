@@ -281,8 +281,14 @@ class FloatCrawler {
                 .concat(categories.map(cat => `<option value="${cat.id}" ${item.categoryId === cat.id ? 'selected' : ''}>${this.uiManager.escapeHtml(cat.name)}</option>`))
                 .join('');
 
-            const coverHtml = item.cover
-                ? `<img src="${this.uiManager.escapeHtml(item.cover)}" alt="" class="float-crawler-item-cover">`
+            // 处理封面 URL，确保格式正确
+            let coverUrl = item.cover || '';
+            if (coverUrl && coverUrl.startsWith('//')) {
+                coverUrl = 'https:' + coverUrl;
+            }
+            
+            const coverHtml = coverUrl
+                ? `<img src="${this.uiManager.escapeHtml(coverUrl)}" alt="" class="float-crawler-item-cover" onerror="this.style.display='none'; this.parentElement.innerHTML='<div class=\\'float-crawler-item-cover no-cover\\'>${item.type === 'video' ? '视频' : '专栏'}</div>';">`
                 : `<div class="float-crawler-item-cover no-cover">${item.type === 'video' ? '视频' : '专栏'}</div>`;
 
             row.innerHTML = `

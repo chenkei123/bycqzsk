@@ -44,11 +44,19 @@
 
     function extractValidCover(img) {
         if (!img) return '';
+        // 尝试多种属性获取图片地址
         var cover = img.getAttribute('data-src')
             || img.getAttribute('data-lazy-src')
             || img.getAttribute('lazy-src')
+            || img.getAttribute('srcset')
             || img.src
             || '';
+        
+        // 处理 srcset（取第一个 URL）
+        if (cover && cover.indexOf(' ') > 0) {
+            cover = cover.split(' ')[0];
+        }
+        
         // 过滤掉 data URI 占位图（懒加载placeholder）
         if (cover && cover.indexOf('data:image') === 0) {
             cover = img.getAttribute('data-src')
@@ -56,6 +64,12 @@
                 || img.getAttribute('lazy-src')
                 || '';
         }
+        
+        // 确保 URL 以 https:// 开头
+        if (cover && cover.startsWith('//')) {
+            cover = 'https:' + cover;
+        }
+        
         return cover;
     }
 
@@ -138,6 +152,10 @@
             const url = 'https://www.bilibili.com/video/' + bvid;
             if (map.has(url)) return;
             const cleanT = cleanTitle(title);
+            // 过滤掉纯数字或时长格式的标题
+            if (cleanT && /^\d+[:：]\d+$/.test(cleanT)) {
+                cleanT = '';
+            }
             map.set(url, {
                 type: 'video',
                 title: cleanT || '未命名视频',
@@ -149,101 +167,96 @@
             });
         }
 
-        // 从页面内嵌JSON数据中提取视频
+        // 从页面内嵌JSON数据中提取视频（最可靠的方式）
         parseJsonBlobs(function (blob) {
             walkVideoJson(blob, add);
         });
 
-        // 从DOM链接中补充提取视频 - 增强选择器
-        const videoSelectors = [
-            'a[href*="/video/BV"]',
-            'a[href*="bilibili.com/video/BV"]',
-            'a[href*="/list/"]'
-        ];
-        
-        document.querySelectorAll(videoSelectors.join(', ')).forEach((anchor) => {
+        // 从DOM链接中补充提取视频
+        // 优先从 B 站空间页的视频卡片中提取
+        document.querySelectorAll('.bili-video-card, [class*="video-card"], [class*="VideoCard"]').forEach((card) => {
+            // 查找卡片内的视频链接
+            const anchor = card.querySelector('a[href*="/video/BV"]');
+            if (!anchor) return;
+            
             const href = anchor.href || anchor.getAttribute('href') || '';
             const match = href.match(/BV[\w]+/);
             if (!match) return;
 
-            // 尝试多种方式获取标题
             let title = '';
             let cover = '';
             
-            // 方法1: 从锚点本身的 title 或 aria-label 属性
-            title = anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
+            // 方法1: 从锚点本身的 title 属性（最可靠）
+            title = anchor.getAttribute('title') || '';
             
-            // 方法2: 查找最近的卡片容器
-            const card = anchor.closest(
-                '.bili-video-card, .small-item, .video-page-card, .list-item, .video-list, ' +
-                '[class*="video-card"], [class*="VideoCard"], [class*="bili-video-card"], ' +
-                '.feed-card, .card, .video-card__content, .bili-video-card__wrap, ' +
-                '.video-list-item, .list-item, .video-item, [data-bvid]'
-            ) || anchor.parentElement;
-
-            // 方法3: 从卡片内查找标题元素
-            if (!title && card) {
-                const titleSelectors = [
-                    '[class*="title"]:not([class*="subtitle"]):not([class*="meta-title"])',
-                    '.bili-video-card__info--tit',
-                    '.bili-video-card__info--tit a',
-                    '[class*="info-title"]',
-                    '[class*="video-name"]',
-                    '.name',
-                    'h3',
-                    'h4',
-                    '.video-name',
-                    '.title-row',
-                    '[class*="video-title"]',
-                    '.bili-video-card__title',
-                    '.title-text',
-                    '.content-title'
-                ];
-                for (const sel of titleSelectors) {
-                    const titleEl = card.querySelector(sel);
-                    if (titleEl && titleEl.textContent.trim()) {
-                        title = titleEl.textContent.trim();
-                        break;
-                    }
-                }
-            }
-            
-            // 方法4: 从锚点文本内容（过滤掉只有 BV 号的文本）
+            // 方法2: 查找卡片内的标题元素（B站空间页特定结构）
             if (!title) {
-                const text = anchor.textContent || '';
-                // 如果文本不是 BV 号格式，则使用
-                if (text && !text.match(/^BV[\w]+$/) && text.trim().length > 3) {
-                    title = text.trim();
+                // B站空间页视频标题通常在 .bili-video-card__info--tit 或类似元素中
+                const titleEl = card.querySelector('.bili-video-card__info--tit, [class*="info-title"], [class*="video-title"], .title');
+                if (titleEl) {
+                    // 获取直接的文本内容，排除子元素
+                    const directText = Array.from(titleEl.childNodes)
+                        .filter(node => node.nodeType === Node.TEXT_NODE)
+                        .map(node => node.textContent)
+                        .join('')
+                        .trim();
+                    title = directText || titleEl.textContent.trim();
                 }
             }
             
-            // 方法5: 从锚点的 data-title 属性
+            // 方法3: 从图片的 alt 属性获取
+            if (!title) {
+                const img = card.querySelector('img');
+                if (img) {
+                    title = img.getAttribute('alt') || '';
+                }
+            }
+            
+            // 方法4: 从 data-title 属性
             if (!title) {
                 title = anchor.getAttribute('data-title') || '';
             }
+
+            // 获取封面
+            const img = card.querySelector('img');
+            if (img) {
+                cover = extractValidCover(img);
+            }
+
+            add(match[0], title, cover);
+        });
+
+        // 补充：从其他视频链接中提取（如果上面的方法没有获取到）
+        document.querySelectorAll('a[href*="/video/BV"]').forEach((anchor) => {
+            const href = anchor.href || anchor.getAttribute('href') || '';
+            const match = href.match(/BV[\w]+/);
+            if (!match) return;
             
-            // 方法6: 从兄弟元素或父元素查找
+            const url = 'https://www.bilibili.com/video/' + match[0];
+            // 如果已经通过卡片提取过，跳过
+            if (map.has(url)) return;
+
+            let title = '';
+            let cover = '';
+            
+            // 从锚点属性获取
+            title = anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
+            
+            // 从父元素查找
             if (!title) {
-                const parent = anchor.parentElement;
+                const parent = anchor.closest('.item, .list-item, .video-item, [class*="card"]');
                 if (parent) {
-                    const siblingTitle = parent.querySelector('[class*="title"]');
-                    if (siblingTitle && siblingTitle.textContent.trim()) {
-                        title = siblingTitle.textContent.trim();
+                    const titleEl = parent.querySelector('h3, .title, [class*="title"]');
+                    if (titleEl) {
+                        title = titleEl.textContent.trim();
                     }
                 }
             }
-
-            // 获取封面
-            if (card) {
-                cover = extractValidCover(card.querySelector('img'));
-            }
             
-            // 如果没有封面，尝试从锚点内查找
-            if (!cover) {
-                const imgInAnchor = anchor.querySelector('img');
-                if (imgInAnchor) {
-                    cover = extractValidCover(imgInAnchor);
-                }
+            // 获取封面
+            const img = anchor.querySelector('img');
+            if (img) {
+                cover = extractValidCover(img);
             }
 
             add(match[0], title, cover);
@@ -657,8 +670,14 @@
             const row = document.createElement('div');
             row.className = 'kb-bili-item';
 
-            const coverHtml = item.cover
-                ? `<img src="${escapeHtml(item.cover)}" alt="">`
+            // 处理封面 URL
+            let coverUrl = item.cover || '';
+            if (coverUrl && coverUrl.startsWith('//')) {
+                coverUrl = 'https:' + coverUrl;
+            }
+
+            const coverHtml = coverUrl
+                ? `<img src="${escapeHtml(coverUrl)}" alt="" onerror="this.style.display='none'; this.parentElement.innerHTML='<div class=\\'kb-bili-cover-ph\\'>${item.type === 'video' ? '视频' : '专栏'}</div>';">`
                 : `<div class="kb-bili-cover-ph">${item.type === 'video' ? '视频' : '专栏'}</div>`;
 
             row.innerHTML = `
