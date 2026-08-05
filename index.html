@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>比翼苍穹考据整理网站</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <h1 class="site-title">比翼苍穹考据整理网站</h1>
+            <nav class="nav">
+                <div class="mode-switcher">
+                    <button class="mode-btn active" data-mode="timeline">时间线</button>
+                    <button class="mode-btn" data-mode="knowledge">知识图谱</button>
+                </div>
+                <div class="nav-links">
+                    <a href="relations.html" class="nav-link">关系图谱</a>
+                    <a href="growth-graph.html" class="nav-link">生长线</a>
+                </div>
+            </nav>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="container">
+            <!-- 搜索区域 -->
+            <section class="search-section">
+                <div class="search-container">
+                    <input type="text" id="search-input" class="search-input" placeholder="搜索视频标题、描述或标签...">
+                    <div class="search-stats">
+                        <span id="search-results-count">0</span> 个结果
+                    </div>
+                </div>
+                <div id="tag-cloud" class="tag-cloud hidden">
+                    <!-- 标签云将在知识图谱模式下动态生成 -->
+                </div>
+            </section>
+
+            <!-- 操作按钮 -->
+            <section class="actions-section">
+                <button id="add-video-btn" class="btn btn-primary">添加视频</button>
+                <button id="batch-import-btn" class="btn btn-secondary">批量导入</button>
+                <button id="batch-manage-btn" class="btn btn-secondary">批量管理</button>
+                <button id="add-category-btn" class="btn btn-secondary">创建分类</button>
+                <button id="export-btn" class="btn btn-secondary">导出数据</button>
+                <!-- 视频/文章切换按钮 -->
+                <div class="type-toggle">
+                    <div class="toggle-container">
+                        <div class="toggle-track">
+                            <div class="toggle-thumb" id="type-toggle"></div>
+                        </div>
+                        <div class="toggle-labels">
+                            <span class="toggle-label video-label active">视频</span>
+                            <span class="toggle-label article-label">文章</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 批量管理工具栏 -->
+            <section id="batch-toolbar" class="batch-toolbar hidden">
+                <div class="batch-toolbar-left">
+                    <span class="batch-select-info">已选择 <span id="batch-selected-count">0</span> 项</span>
+                </div>
+                <div class="batch-toolbar-right">
+                    <button type="button" id="batch-select-all-btn" class="btn btn-secondary btn-sm">全选</button>
+                    <button type="button" id="batch-deselect-all-btn" class="btn btn-secondary btn-sm">全不选</button>
+                    <button type="button" id="batch-delete-btn" class="btn btn-danger btn-sm">批量删除</button>
+                    <button type="button" id="batch-exit-btn" class="btn btn-secondary btn-sm">退出管理</button>
+                </div>
+            </section>
+
+            <!-- 接口管理（仅开发者模式可见） -->
+            <section class="api-section" aria-hidden="true">
+                <h3>B站接口管理</h3>
+                <p class="api-section-hint">设置要自动监控的B站空间页面，系统将每24小时自动检测并导入新视频与专栏。</p>
+                <div class="api-settings">
+                    <div class="api-setting">
+                        <label for="video-api-url">视频空间页</label>
+                        <input type="text" id="video-api-url" placeholder="https://space.bilibili.com/.../upload/video" value="https://space.bilibili.com/1939904826/upload/video">
+                    </div>
+                    <div class="api-setting">
+                        <label for="article-api-url">专栏空间页</label>
+                        <input type="text" id="article-api-url" placeholder="https://space.bilibili.com/.../upload/opus" value="https://space.bilibili.com/1939904826/upload/opus">
+                    </div>
+                    <div class="api-actions">
+                        <button id="save-api-btn" class="btn btn-secondary">保存接口设置</button>
+                        <button id="refresh-api-btn" class="btn btn-primary">手动刷新爬取</button>
+                    </div>
+                    <p id="api-crawl-status" class="api-crawl-status"></p>
+                    <div class="api-setting dev-tools-block">
+                        <h4>开发者工具</h4>
+                        <p class="api-section-hint">控制台命令：<code>KBDev.enable()</code> 开启开发者 · <code>KBDev.disable()</code> 游客模式 · <code>KBDev.enableFloat()</code> 开启本站悬浮窗 · <code>KBDev.status()</code> 查看状态</p>
+                        <label class="float-crawler-setting-label" id="float-crawler-setting-row">
+                            <input type="checkbox" id="float-crawler-toggle-setting">
+                            开启本站 B 站爬取悬浮窗
+                        </label>
+                        <div class="api-setting">
+                            <label for="kb-bookmarklet-url">知识库地址（导入目标）</label>
+                            <input type="text" id="kb-bookmarklet-url" placeholder="index.html 的完整 URL 或 file:/// 路径">
+                            <div class="api-actions">
+                                <button type="button" id="copy-userscript-btn" class="btn btn-primary btn-sm">复制油猴脚本（推荐）</button>
+                                <button type="button" id="copy-bookmarklet-btn" class="btn btn-secondary btn-sm">复制 B 站激活书签</button>
+                            </div>
+                            <p class="api-section-hint"><strong>在 B 站显示悬浮窗：</strong>安装油猴脚本（Tampermonkey）后，访问任意 bilibili.com 页面即可看到右下角「爬」按钮。或复制激活书签，在 B 站页面点击一次即可激活。</p>
+                            <p class="api-section-hint">爬取流程：在 B 站页面点击悬浮窗 → 选择视频/专栏 → 编辑后「导入知识库」→ 自动打开知识库页面确认导入。</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 分类区域 -->
+            <section id="categories-section" class="categories-section">
+                <h3 class="section-title">分类管理</h3>
+                <p class="section-hint">拖拽视频卡片到分类中即可添加</p>
+                <div id="categories-container" class="categories-container">
+                    <!-- 分类将在这里动态渲染 -->
+                </div>
+            </section>
+
+            <!-- 内容容器 -->
+            <section id="content-container" class="content-container">
+                <!-- 视频卡片将在这里动态渲染 -->
+            </section>
+
+            <!-- 加载指示器 -->
+            <div id="loading-indicator" class="loading-indicator hidden">
+                <div class="spinner"></div>
+                <span>加载中...</span>
+            </div>
+
+            <!-- 滚动哨兵（用于无限滚动） -->
+            <div id="scroll-sentinel" class="scroll-sentinel"></div>
+        </div>
+    </main>
+
+    <!-- 添加视频模态框 -->
+    <div id="add-video-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>添加内容</h2>
+                <button id="close-modal" class="close-btn">×</button>
+            </div>
+            <form id="video-form" class="video-form">
+                <div class="form-group">
+                    <label for="content-type">内容类型</label>
+                    <select id="content-type" name="type" class="form-control">
+                        <option value="video">视频</option>
+                        <option value="article">文章</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="video-url">链接</label>
+                    <input type="url" id="video-url" name="url" required placeholder="https://www.bilibili.com/video/BV... 或 https://www.bilibili.com/read/cv...">
+                    <button type="button" id="smart-fill-btn" class="btn btn-smart">智能填充</button>
+                </div>
+                
+                <div class="form-group">
+                    <label for="video-title">标题</label>
+                    <input type="text" id="video-title" name="title" required placeholder="标题">
+                </div>
+                
+                <div class="form-group">
+                    <label for="video-cover">封面图URL</label>
+                    <input type="url" id="video-cover" name="cover" placeholder="https://...">
+                </div>
+                
+                <div class="form-group">
+                    <label for="cover-upload">上传封面图</label>
+                    <input type="file" id="cover-upload" name="cover-upload" accept="image/*">
+                    <div id="cover-preview" class="cover-preview">
+                        <img id="preview-image" src="" alt="预览" class="hidden">
+                    </div>
+                    <div id="paste-area" class="paste-area">
+                        <p>或直接粘贴图片到此处</p>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="video-desc">描述</label>
+                    <textarea id="video-desc" name="desc" rows="3" placeholder="简介或笔记"></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="video-tags">标签</label>
+                    <div class="tags-input-container">
+                        <input type="text" id="video-tags" placeholder="输入标签，按回车或逗号分隔">
+                        <div id="tags-preview" class="tags-preview"></div>
+                    </div>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">保存</button>
+                    <button type="button" id="cancel-form" class="btn btn-secondary">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 批量导入模态框 -->
+    <div id="batch-import-modal" class="modal hidden">
+        <div class="modal-content batch-import-content">
+            <div class="modal-header">
+                <h2>批量导入链接</h2>
+                <button id="close-batch-modal" class="close-btn">×</button>
+            </div>
+            <div class="batch-import-body">
+                <div class="batch-import-tip">
+                    <span class="tip-icon">💡</span>
+                    <p>每行输入一个网页链接，支持 B站视频/文章、YouTube、任意网页等。系统会自动识别并提取标题等信息。</p>
+                </div>
+                
+                <div class="form-group">
+                    <label for="batch-url-input">链接列表</label>
+                    <textarea id="batch-url-input" rows="10" placeholder="https://www.bilibili.com/video/BV1xx411c7XX&#10;https://www.bilibili.com/read/cv12345678&#10;https://www.youtube.com/watch?v=xxxxx&#10;https://example.com/article"></textarea>
+                    <div class="batch-actions-row">
+                        <button type="button" id="batch-paste-btn" class="btn btn-sm btn-secondary">从剪贴板粘贴</button>
+                        <button type="button" id="batch-clear-btn" class="btn btn-sm btn-secondary">清空</button>
+                        <span class="batch-count"><span id="batch-url-count">0</span> 个链接</span>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>通用设置（应用于所有条目）</label>
+                    <div class="batch-settings">
+                        <div class="setting-item">
+                            <label for="batch-default-type">默认类型</label>
+                            <select id="batch-default-type" class="form-control form-control-sm">
+                                <option value="auto">自动检测</option>
+                                <option value="video">视频</option>
+                                <option value="article">文章</option>
+                            </select>
+                        </div>
+                        <div class="setting-item">
+                            <label for="batch-tags">通用标签</label>
+                            <input type="text" id="batch-tags" class="form-control form-control-sm" placeholder="多个标签用逗号分隔">
+                        </div>
+                    </div>
+                </div>
+
+                <div id="batch-preview-area" class="batch-preview-area hidden">
+                    <h3>预览 (<span id="batch-preview-count">0</span> 条)</h3>
+                    <div id="batch-preview-list" class="batch-preview-list"></div>
+                </div>
+
+                <div id="batch-progress-area" class="batch-progress-area hidden">
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="batch-progress-bar" style="width: 0%"></div>
+                    </div>
+                    <p id="batch-progress-text">正在处理...</p>
+                </div>
+
+                <div class="batch-form-actions">
+                    <button type="button" id="batch-preview-btn" class="btn btn-primary">预览</button>
+                    <button type="button" id="batch-start-btn" class="btn btn-primary hidden">开始导入</button>
+                    <button type="button" id="cancel-batch-modal" class="btn btn-secondary">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部声明 -->
+    <footer class="footer">
+        <div class="container">
+            <p>数据存储于本地浏览器，完全私密 • 基于Web Crypto API的安全身份系统（预留）</p>
+        </div>
+    </footer>
+
+    <!-- B站爬取悬浮窗（开发者模式可开启） -->
+    <div id="float-crawler-root" class="float-crawler-root hidden">
+        <button id="float-crawler-fab" class="float-crawler-fab" type="button" title="B站页面爬取">爬</button>
+        <div id="float-crawler-panel" class="float-crawler-panel hidden">
+            <div class="float-crawler-header">
+                <h3>B站页面爬取</h3>
+                <button id="float-crawler-close" class="float-crawler-close" type="button">×</button>
+            </div>
+            <div class="float-crawler-body">
+                <div class="float-crawler-url-row">
+                    <input type="url" id="float-crawler-url" placeholder="粘贴 B 站页面链接，如空间投稿页、搜索结果页">
+                    <div class="float-crawler-url-actions">
+                        <button type="button" id="float-crawler-paste-url" class="btn btn-secondary btn-sm">粘贴链接</button>
+                        <button type="button" id="float-crawler-use-current" class="btn btn-secondary btn-sm">使用说明</button>
+                    </div>
+                </div>
+                <p id="float-crawler-status" class="float-crawler-status">选择要爬取的内容类型</p>
+                <div id="float-crawler-step-menu" class="float-crawler-step-menu">
+                    <button type="button" id="float-crawler-crawl-video" class="btn btn-primary float-crawler-type-btn">爬取视频</button>
+                    <button type="button" id="float-crawler-crawl-article" class="btn btn-secondary float-crawler-type-btn">爬取专栏</button>
+                </div>
+                <div id="float-crawler-preview" class="float-crawler-preview hidden">
+                    <div class="float-crawler-preview-toolbar">
+                        <label>统一分类
+                            <select id="float-crawler-global-category"></select>
+                        </label>
+                        <button type="button" id="float-crawler-select-all" class="btn btn-secondary btn-sm">全选</button>
+                        <button type="button" id="float-crawler-select-none" class="btn btn-secondary btn-sm">全不选</button>
+                    </div>
+                    <div id="float-crawler-preview-list" class="float-crawler-preview-list"></div>
+                    <div class="float-crawler-preview-actions">
+                        <button type="button" id="float-crawler-back" class="btn btn-secondary">返回</button>
+                        <button type="button" id="float-crawler-confirm" class="btn btn-primary">确定导入</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 脚本引入 -->
+    <script src="https://cdn.jsdelivr.net/npm/flexsearch@0.7.31/dist/flexsearch.bundle.js"></script>
+    <script src="models.js"></script>
+    <script src="db.js"></script>
+    <script src="core.js"></script>
+    <script src="bilibili-crawler.js"></script>
+    <script src="dev-mode.js"></script>
+    <script src="ui.js"></script>
+    <script src="float-crawler.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
