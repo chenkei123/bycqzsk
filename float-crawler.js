@@ -375,28 +375,9 @@ class FloatCrawler {
             const items = this.crawler.normalizeImportedItems(decoded.items || decoded, type);
 
             if (items.length) {
-                // 直接设置 pendingItems 并显示预览
-                this.pendingItems = items;
-                this.currentType = type || 'video';
-                this.isPanelOpen = true;
-                
-                // 确保 UI 可见
-                if (this.root) {
-                    this.root.classList.remove('hidden');
-                }
-                if (this.fab) {
-                    this.fab.style.display = 'flex';
-                }
-                this.panel?.classList.remove('hidden');
-                this.fab?.classList.add('active');
-                
-                // 延迟渲染，确保 DOM 已准备好
-                setTimeout(() => {
-                    this.populateGlobalCategoryOptions();
-                    this.renderPreview();
-                    this.showPreview();
-                    this.setStatus(`从 B 站页面导入了 ${items.length} 条待确认内容，请选择分类后点击「确定导入」`);
-                }, 100);
+                // 存储到 sessionStorage，等待 DOM 准备好后再加载
+                sessionStorage.setItem('pendingKbImport', JSON.stringify({ type, items }));
+                console.log('[FloatCrawler] 导入数据已存储，等待加载:', items.length, '条');
             }
         } catch (error) {
             console.error('解析导入数据失败:', error);
@@ -423,18 +404,30 @@ class FloatCrawler {
             this.currentType = type || 'video';
             this.isPanelOpen = true;
 
-            if (this.root) {
-                this.root.classList.remove('hidden');
-            }
-            if (this.fab) {
-                this.fab.style.display = 'flex';
-            }
-            this.panel?.classList.remove('hidden');
-            this.fab?.classList.add('active');
-            this.populateGlobalCategoryOptions();
-            this.renderPreview();
-            this.showPreview();
-            this.setStatus(`从 B 站页面导入了 ${items.length} 条待确认内容，请选择分类后点击「确定导入」`);
+            // 延迟执行，确保 DOM 已准备好
+            setTimeout(() => {
+                // 重新初始化 DOM 引用（确保获取到最新元素）
+                this.initDOM();
+                
+                if (this.root) {
+                    this.root.classList.remove('hidden');
+                }
+                if (this.fab) {
+                    this.fab.style.display = 'flex';
+                }
+                if (this.panel) {
+                    this.panel.classList.remove('hidden');
+                }
+                if (this.fab) {
+                    this.fab.classList.add('active');
+                }
+                
+                this.populateGlobalCategoryOptions();
+                this.renderPreview();
+                this.showPreview();
+                this.setStatus(`从 B 站页面导入了 ${items.length} 条待确认内容，请选择分类后点击「确定导入」`);
+                console.log('[FloatCrawler] 导入内容已显示:', items.length, '条');
+            }, 200);
         } catch (error) {
             console.error('加载待导入内容失败:', error);
         }

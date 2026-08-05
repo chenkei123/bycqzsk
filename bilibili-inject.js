@@ -89,6 +89,30 @@
             if (script.id === '__NEXT_DATA__' || (script.type === 'application/json' && text.includes('__NEXT_DATA__'))) {
                 try { callback(JSON.parse(text)); } catch (_) { /* ignore */ }
             }
+            
+            // 4. 尝试解析所有 application/json 类型的脚本（可能包含视频数据）
+            if (script.type === 'application/json' && script.id !== '__RENDER_DATA__' && script.id !== '__NEXT_DATA__') {
+                try { 
+                    var jsonData = JSON.parse(text);
+                    // 检查是否包含视频相关数据
+                    if (text.includes('bvid') || text.includes('BV') || text.includes('video')) {
+                        callback(jsonData);
+                    }
+                } catch (_) { /* ignore */ }
+            }
+            
+            // 5. 查找内联 JSON 赋值（如 window.__PLAYINFO__ 等）
+            var inlineMatches = text.match(/window\.__\w+__\s*=\s*(\{[\s\S]*?\});/g);
+            if (inlineMatches) {
+                inlineMatches.forEach(function(m) {
+                    try {
+                        var jsonMatch = m.match(/window\.__\w+__\s*=\s*(\{[\s\S]*?\});/);
+                        if (jsonMatch) {
+                            callback(JSON.parse(jsonMatch[1]));
+                        }
+                    } catch (_) { /* ignore */ }
+                });
+            }
         });
     }
 
@@ -153,21 +177,27 @@
             const card = anchor.closest(
                 '.bili-video-card, .small-item, .video-page-card, .list-item, .video-list, ' +
                 '[class*="video-card"], [class*="VideoCard"], [class*="bili-video-card"], ' +
-                '.feed-card, .card, .video-card__content, .bili-video-card__wrap'
+                '.feed-card, .card, .video-card__content, .bili-video-card__wrap, ' +
+                '.video-list-item, .list-item, .video-item, [data-bvid]'
             ) || anchor.parentElement;
 
             // 方法3: 从卡片内查找标题元素
             if (!title && card) {
                 const titleSelectors = [
-                    '[class*="title"]:not([class*="subtitle"])',
+                    '[class*="title"]:not([class*="subtitle"]):not([class*="meta-title"])',
                     '.bili-video-card__info--tit',
                     '.bili-video-card__info--tit a',
+                    '[class*="info-title"]',
+                    '[class*="video-name"]',
                     '.name',
                     'h3',
+                    'h4',
                     '.video-name',
                     '.title-row',
                     '[class*="video-title"]',
-                    '.bili-video-card__title'
+                    '.bili-video-card__title',
+                    '.title-text',
+                    '.content-title'
                 ];
                 for (const sel of titleSelectors) {
                     const titleEl = card.querySelector(sel);
@@ -178,14 +208,29 @@
                 }
             }
             
-            // 方法4: 从锚点文本内容
+            // 方法4: 从锚点文本内容（过滤掉只有 BV 号的文本）
             if (!title) {
-                title = anchor.textContent || '';
+                const text = anchor.textContent || '';
+                // 如果文本不是 BV 号格式，则使用
+                if (text && !text.match(/^BV[\w]+$/) && text.trim().length > 3) {
+                    title = text.trim();
+                }
             }
             
             // 方法5: 从锚点的 data-title 属性
             if (!title) {
                 title = anchor.getAttribute('data-title') || '';
+            }
+            
+            // 方法6: 从兄弟元素或父元素查找
+            if (!title) {
+                const parent = anchor.parentElement;
+                if (parent) {
+                    const siblingTitle = parent.querySelector('[class*="title"]');
+                    if (siblingTitle && siblingTitle.textContent.trim()) {
+                        title = siblingTitle.textContent.trim();
+                    }
+                }
             }
 
             // 获取封面
@@ -216,8 +261,17 @@
         }
 
         if (typeof node === 'object') {
-            if (node.bvid && (node.title || node.name)) {
-                add(node.bvid, node.title || node.name, node.pic || node.cover || '');
+            // 查找 bvid 或 bv_id
+            const bvid = node.bvid || node.bv_id || node.BV;
+            // 查找标题（尝试多种可能的字段名）
+            const title = node.title || node.name || node.desc || node.description || 
+                         node.content || node.vtitle || node.video_title || node.t;
+            // 查找封面（尝试多种可能的字段名）
+            const cover = node.pic || node.cover || node.cover_url || node.img || 
+                         node.thumbnail || node.image || node.poster;
+            
+            if (bvid && title) {
+                add(bvid, title, cover || '');
             }
             Object.values(node).forEach((value) => walkVideoJson(value, add, depth + 1));
         }
