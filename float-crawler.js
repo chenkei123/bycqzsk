@@ -375,7 +375,28 @@ class FloatCrawler {
             const items = this.crawler.normalizeImportedItems(decoded.items || decoded, type);
 
             if (items.length) {
-                sessionStorage.setItem('pendingKbImport', JSON.stringify({ type, items }));
+                // 直接设置 pendingItems 并显示预览
+                this.pendingItems = items;
+                this.currentType = type || 'video';
+                this.isPanelOpen = true;
+                
+                // 确保 UI 可见
+                if (this.root) {
+                    this.root.classList.remove('hidden');
+                }
+                if (this.fab) {
+                    this.fab.style.display = 'flex';
+                }
+                this.panel?.classList.remove('hidden');
+                this.fab?.classList.add('active');
+                
+                // 延迟渲染，确保 DOM 已准备好
+                setTimeout(() => {
+                    this.populateGlobalCategoryOptions();
+                    this.renderPreview();
+                    this.showPreview();
+                    this.setStatus(`从 B 站页面导入了 ${items.length} 条待确认内容，请选择分类后点击「确定导入」`);
+                }, 100);
             }
         } catch (error) {
             console.error('解析导入数据失败:', error);

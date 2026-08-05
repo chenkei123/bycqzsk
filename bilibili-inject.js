@@ -130,28 +130,75 @@
             walkVideoJson(blob, add);
         });
 
-        // 从DOM链接中补充提取视频
-        document.querySelectorAll('a[href*="/video/BV"], a[href*="bilibili.com/video/BV"]').forEach((anchor) => {
+        // 从DOM链接中补充提取视频 - 增强选择器
+        const videoSelectors = [
+            'a[href*="/video/BV"]',
+            'a[href*="bilibili.com/video/BV"]',
+            'a[href*="/list/"]'
+        ];
+        
+        document.querySelectorAll(videoSelectors.join(', ')).forEach((anchor) => {
             const href = anchor.href || anchor.getAttribute('href') || '';
             const match = href.match(/BV[\w]+/);
             if (!match) return;
 
+            // 尝试多种方式获取标题
+            let title = '';
+            let cover = '';
+            
+            // 方法1: 从锚点本身的 title 或 aria-label 属性
+            title = anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
+            
+            // 方法2: 查找最近的卡片容器
             const card = anchor.closest(
-                '.bili-video-card, .small-item, .video-page-card, .list-item, .video-list, [class*="video-card"], [class*="VideoCard"]'
+                '.bili-video-card, .small-item, .video-page-card, .list-item, .video-list, ' +
+                '[class*="video-card"], [class*="VideoCard"], [class*="bili-video-card"], ' +
+                '.feed-card, .card, .video-card__content, .bili-video-card__wrap'
             ) || anchor.parentElement;
 
-            let title = anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
+            // 方法3: 从卡片内查找标题元素
             if (!title && card) {
-                const titleEl = card.querySelector(
-                    '[class*="title"], .title, .name, h3, .bili-video-card__info--tit, .video-name'
-                );
-                title = titleEl ? titleEl.textContent : '';
+                const titleSelectors = [
+                    '[class*="title"]:not([class*="subtitle"])',
+                    '.bili-video-card__info--tit',
+                    '.bili-video-card__info--tit a',
+                    '.name',
+                    'h3',
+                    '.video-name',
+                    '.title-row',
+                    '[class*="video-title"]',
+                    '.bili-video-card__title'
+                ];
+                for (const sel of titleSelectors) {
+                    const titleEl = card.querySelector(sel);
+                    if (titleEl && titleEl.textContent.trim()) {
+                        title = titleEl.textContent.trim();
+                        break;
+                    }
+                }
             }
-            if (!title) title = anchor.textContent || '';
+            
+            // 方法4: 从锚点文本内容
+            if (!title) {
+                title = anchor.textContent || '';
+            }
+            
+            // 方法5: 从锚点的 data-title 属性
+            if (!title) {
+                title = anchor.getAttribute('data-title') || '';
+            }
 
-            let cover = '';
+            // 获取封面
             if (card) {
                 cover = extractValidCover(card.querySelector('img'));
+            }
+            
+            // 如果没有封面，尝试从锚点内查找
+            if (!cover) {
+                const imgInAnchor = anchor.querySelector('img');
+                if (imgInAnchor) {
+                    cover = extractValidCover(imgInAnchor);
+                }
             }
 
             add(match[0], title, cover);
@@ -223,33 +270,93 @@
             walkArticleJson(blob, add);
         });
 
-        // 从script标签中用正则补充提取
+        // 从script标签中用正则补充提取 - 增强匹配
         document.querySelectorAll('script').forEach((script) => {
             const text = script.textContent || '';
             if (!text.includes('opus_id') && !text.includes('opus')) return;
 
-            const regex = /"opus_id"\s*:\s*"(\d+)"[\s\S]{0,600}?"content"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+            // 匹配 opus_id 和 content/title
+            const regex = /"opus_id"\s*:\s*"?(\d+)"?[\s\S]{0,800}?(?:"content"|"title")\s*:\s*"((?:\\.|[^"\\])*)"/g;
             let match;
             while ((match = regex.exec(text)) !== null) {
                 add(match[1], match[2].replace(/\\u0026/g, '&'), '');
             }
+            
+            // 额外匹配：从 items 数组中提取
+            const itemsRegex = /"opus_id"\s*:\s*(\d+)[\s\S]{0,500}?"content"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+            while ((match = itemsRegex.exec(text)) !== null) {
+                add(match[1], match[2].replace(/\\u0026/g, '&'), '');
+            }
         });
 
-        // 从DOM链接中补充提取专栏
-        document.querySelectorAll('a[href*="/opus/"], a[href*="/read/cv"]').forEach((anchor) => {
+        // 从DOM链接中补充提取专栏 - 增强选择器
+        const articleSelectors = [
+            'a[href*="/opus/"]',
+            'a[href*="/read/cv"]',
+            'a[href*="bilibili.com/opus/"]',
+            'a[href*="bilibili.com/read/cv"]'
+        ];
+        
+        document.querySelectorAll(articleSelectors.join(', ')).forEach((anchor) => {
             const href = anchor.href || anchor.getAttribute('href') || '';
             const opusMatch = href.match(/opus\/(\d+)/) || href.match(/read\/cv(\d+)/);
             if (!opusMatch) return;
 
-            const card = anchor.closest('[class*="opus"], [class*="article"], .item, .card') || anchor;
-            let title = anchor.getAttribute('title') || '';
-            if (!title) {
-                const titleEl = card.querySelector('[class*="title"], .title, .content, h3');
-                title = titleEl ? titleEl.textContent : '';
+            // 尝试多种方式获取标题
+            let title = '';
+            let cover = '';
+            
+            // 方法1: 从锚点属性
+            title = anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '';
+            
+            // 方法2: 查找卡片容器
+            const card = anchor.closest(
+                '[class*="opus"], [class*="article"], [class*="opus-card"], ' +
+                '.item, .card, .opus-card, .article-card, .feed-card'
+            ) || anchor;
+            
+            // 方法3: 从卡片内查找标题元素
+            if (!title && card) {
+                const titleSelectors = [
+                    '[class*="title"]:not([class*="subtitle"])',
+                    '[class*="opus-title"]',
+                    '[class*="article-title"]',
+                    '.content',
+                    '.opus-card__title',
+                    '.article-title',
+                    'h3',
+                    'h4',
+                    '.title'
+                ];
+                for (const sel of titleSelectors) {
+                    const titleEl = card.querySelector(sel);
+                    if (titleEl && titleEl.textContent.trim()) {
+                        title = titleEl.textContent.trim();
+                        break;
+                    }
+                }
             }
-            if (!title) title = anchor.textContent || '';
+            
+            // 方法4: 从锚点文本
+            if (!title) {
+                title = anchor.textContent || '';
+            }
+            
+            // 方法5: 从 data-title 属性
+            if (!title) {
+                title = anchor.getAttribute('data-title') || '';
+            }
 
-            let cover = extractValidCover(card.querySelector('img'));
+            // 获取封面
+            cover = extractValidCover(card.querySelector('img'));
+            
+            // 如果没有封面，尝试从锚点内查找
+            if (!cover) {
+                const imgInAnchor = anchor.querySelector('img');
+                if (imgInAnchor) {
+                    cover = extractValidCover(imgInAnchor);
+                }
+            }
 
             const url = href.startsWith('http') ? href : 'https:' + href;
             add(opusMatch[1], title, cover, url);
@@ -529,13 +636,31 @@
 
         let kbUrl = getKbUrl();
         if (!kbUrl) {
-            kbUrl = prompt('请输入知识库网站地址（index.html 的完整路径或 URL）', 'file:///');
+            kbUrl = prompt('请输入知识库网站地址（index.html 的完整路径或 URL）', 'https://chenkei123.github.io/bycqzsk/');
             if (!kbUrl) return;
             setKbUrl(kbUrl);
         }
 
+        // 规范化知识库 URL
+        kbUrl = kbUrl.trim();
+        
+        // 确保 URL 有协议
+        if (kbUrl.startsWith('//')) {
+            kbUrl = 'https:' + kbUrl;
+        } else if (!kbUrl.match(/^https?:\/\//i)) {
+            // 如果没有协议，尝试添加 https://
+            kbUrl = 'https://' + kbUrl;
+        }
+        
+        // 确保 URL 以 / 结尾或指向 index.html
+        if (!kbUrl.endsWith('/') && !kbUrl.endsWith('.html')) {
+            kbUrl += '/';
+        }
+
         const type = selected[0].type;
-        const payload = btoa(unescape(encodeURIComponent(JSON.stringify({
+        
+        // 构建导入数据
+        const importData = {
             type,
             items: selected.map((item) => ({
                 type: item.type,
@@ -544,12 +669,48 @@
                 cover: item.cover,
                 desc: item.desc
             }))
-        }))));
+        };
 
-        const target = kbUrl.split('#')[0] + '#kbimport=' + encodeURIComponent(payload);
-        window.open(target, '_blank');
-        setStatus('已打开知识库页面，请在知识库中确认导入');
-        alert('已在新标签页打开知识库，请在知识库悬浮窗中确认导入 ' + selected.length + ' 条内容');
+        // 使用 encodeURIComponent + btoa 编码数据
+        let payload;
+        try {
+            payload = btoa(unescape(encodeURIComponent(JSON.stringify(importData))));
+        } catch (e) {
+            console.error('编码导入数据失败:', e);
+            alert('数据编码失败，请重试');
+            return;
+        }
+
+        // 构建目标 URL（移除 hash 避免重复）
+        const baseUrl = kbUrl.split('#')[0];
+        const target = baseUrl + '#kbimport=' + encodeURIComponent(payload);
+        
+        console.log('[知识库] 正在跳转到:', target);
+        
+        // 尝试多种方式打开
+        try {
+            const newWindow = window.open(target, '_blank');
+            if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+                // 弹窗被阻止，尝试当前页面跳转
+                if (confirm('新窗口可能被浏览器阻止。是否在当前页面打开知识库？')) {
+                    window.location.href = target;
+                }
+            } else {
+                setStatus('已打开知识库页面，请在知识库中确认导入');
+                alert('已在新标签页打开知识库，请在知识库悬浮窗中确认导入 ' + selected.length + ' 条内容');
+            }
+        } catch (e) {
+            console.error('打开知识库失败:', e);
+            if (confirm('无法自动打开知识库。是否手动复制导入数据？')) {
+                // 提供手动复制选项
+                const dataStr = JSON.stringify(importData, null, 2);
+                navigator.clipboard.writeText(dataStr).then(function() {
+                    alert('导入数据已复制到剪贴板，请手动粘贴到知识库');
+                }).catch(function() {
+                    prompt('请复制以下导入数据:', dataStr);
+                });
+            }
+        }
     }
 
     function updateFabVisibility() {
