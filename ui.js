@@ -1771,6 +1771,28 @@ class UIManager {
     loadCategories() {
         const saved = localStorage.getItem('videoCategories');
         this.categories = saved ? JSON.parse(saved) : [];
+        
+        // 确保三个固定分类存在
+        const fixedCategories = [
+            { name: '硬核战双', id: 'cat_fixed_hardcore' },
+            { name: '硬核战双（文字版）', id: 'cat_fixed_hardcore_text' },
+            { name: '潮声回响', id: 'cat_fixed_chaosheng' }
+        ];
+        
+        fixedCategories.forEach(fc => {
+            const exists = this.categories.find(c => c.name === fc.name);
+            if (!exists) {
+                this.categories.push({
+                    id: fc.id,
+                    name: fc.name,
+                    videoIds: [],
+                    created: Date.now(),
+                    isFixed: true  // 标记为固定分类
+                });
+            }
+        });
+        
+        this.saveCategories();
     }
 
     saveCategories() {
