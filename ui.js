@@ -1911,7 +1911,19 @@ class UIManager {
     }
 
     saveCategories() {
-        localStorage.setItem('videoCategories', JSON.stringify(this.categories));
+        try {
+            localStorage.setItem('videoCategories', JSON.stringify(this.categories));
+        } catch (e) {
+            console.error('保存分类数据失败:', e);
+            // 尝试清理旧的 localStorage 备份数据以释放空间
+            try {
+                localStorage.removeItem('kb_data_backup');
+                localStorage.setItem('videoCategories', JSON.stringify(this.categories));
+                console.log('清理旧备份后分类数据保存成功');
+            } catch (e2) {
+                console.error('清理后仍无法保存分类数据:', e2);
+            }
+        }
     }
 
     createCategory(name) {
@@ -1933,11 +1945,13 @@ class UIManager {
         this.renderCategories();
     }
 
-    addVideoToCategory(categoryId, videoId) {
+    addVideoToCategory(categoryId, videoId, skipSave) {
         const category = this.categories.find(c => c.id === categoryId);
         if (category && !category.videoIds.includes(videoId)) {
             category.videoIds.push(videoId);
-            this.saveCategories();
+            if (!skipSave) {
+                this.saveCategories();
+            }
         }
     }
 
@@ -2019,7 +2033,8 @@ class UIManager {
                             return String(id) === vid;
                         });
                         if (!alreadyIn) {
-                            self.addVideoToCategory(categoryId, video.id);
+                            // 使用 skipSave 避免每次都写入 localStorage，批量结束后统一保存
+                            self.addVideoToCategory(categoryId, video.id, true);
                             categorizedCount++;
                         } else {
                             alreadyInCategoryCount++;
@@ -2031,6 +2046,11 @@ class UIManager {
                     noMatchCount++;
                 }
             });
+
+            // 批量保存一次，避免频繁写入 localStorage 导致配额溢出
+            if (categorizedCount > 0) {
+                this.saveCategories();
+            }
 
             console.log('[自动扫描] 总计 ' + allVideos.length + ' 条视频，新增分类 ' + categorizedCount + ' 条，已在分类中 ' + alreadyInCategoryCount + ' 条，无匹配 ' + noMatchCount + ' 条');
 
@@ -2555,10 +2575,10 @@ class UIManager {
                     continue;
                 }
                 const saved = await coreService.addVideo(videoData);
-                // 自动根据标题分类
+                // 自动根据标题分类（使用 skipSave 避免频繁写入 localStorage）
                 const autoCategoryId = this.getAutoCategoryByTitle(title);
                 if (autoCategoryId) {
-                    this.addVideoToCategory(autoCategoryId, saved.id);
+                    this.addVideoToCategory(autoCategoryId, saved.id, true);
                 }
                 successCount++;
             } catch (error) {
@@ -2569,6 +2589,9 @@ class UIManager {
             // 短暂延迟，避免过快请求
             await new Promise(resolve => setTimeout(resolve, 100));
         }
+
+        // 批量保存分类数据一次
+        this.saveCategories();
 
         // 完成
         this.elements.batchProgressBar.style.width = '100%';
