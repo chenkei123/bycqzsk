@@ -1882,17 +1882,21 @@ class UIManager {
     loadCategories() {
         const saved = localStorage.getItem('videoCategories');
         this.categories = saved ? JSON.parse(saved) : [];
-        
+
         // 确保三个固定分类存在
         const fixedCategories = [
             { name: '硬核战双', id: 'cat_fixed_hardcore' },
             { name: '硬核战双（文字版）', id: 'cat_fixed_hardcore_text' },
             { name: '潮声回响', id: 'cat_fixed_chaosheng' }
         ];
-        
+
         fixedCategories.forEach(fc => {
-            const exists = this.categories.find(c => c.name === fc.name);
-            if (!exists) {
+            const existing = this.categories.find(c => c.name === fc.name);
+            if (existing) {
+                // 如果同名分类已存在，确保使用正确的固定ID并标记为固定分类
+                existing.id = fc.id;
+                existing.isFixed = true;
+            } else {
                 this.categories.push({
                     id: fc.id,
                     name: fc.name,
@@ -1902,7 +1906,7 @@ class UIManager {
                 });
             }
         });
-        
+
         this.saveCategories();
     }
 
@@ -1954,15 +1958,27 @@ class UIManager {
     getAutoCategoryByTitle(title) {
         if (!title) return null;
 
+        // 标准化标题：统一半角括号为全角括号，避免因括号差异导致匹配失败
+        var normalizedTitle = String(title).replace(/\(/g, '（').replace(/\)/g, '）');
+
+        var categoryName = null;
+
         // 必须先检测「硬核战双（文字版）」，因为它包含「硬核战双」
-        if (title.includes('硬核战双（文字版）')) {
-            return 'cat_fixed_hardcore_text';
+        if (normalizedTitle.includes('硬核战双（文字版）')) {
+            categoryName = '硬核战双（文字版）';
+        } else if (normalizedTitle.includes('硬核战双')) {
+            categoryName = '硬核战双';
+        } else if (normalizedTitle.includes('潮声回响')) {
+            categoryName = '潮声回响';
         }
-        if (title.includes('硬核战双')) {
-            return 'cat_fixed_hardcore';
-        }
-        if (title.includes('潮声回响')) {
-            return 'cat_fixed_chaosheng';
+
+        // 按名称查找分类，确保即使分类ID不一致也能正确匹配
+        if (categoryName) {
+            var category = this.categories.find(function(c) { return c.name === categoryName; });
+            if (category) {
+                return category.id;
+            }
+            console.warn('[自动分类] 找到匹配的分类名 "' + categoryName + '" 但分类列表中不存在该分类');
         }
 
         return null;
@@ -1973,6 +1989,14 @@ class UIManager {
      */
     async autoScanCategorize() {
         try {
+            // 确保固定分类已加载
+            this.loadCategories();
+
+            if (!videoDB) {
+                this.showError('数据库未初始化，无法扫描');
+                return;
+            }
+
             const allVideos = await videoDB.getAllVideos();
             if (allVideos.length === 0) {
                 this.showError('暂无可扫描的视频');
@@ -1980,29 +2004,47 @@ class UIManager {
             }
 
             let categorizedCount = 0;
+            let alreadyInCategoryCount = 0;
+            let noMatchCount = 0;
             const self = this;
 
             allVideos.forEach(function(video) {
                 const categoryId = self.getAutoCategoryByTitle(video.title);
                 if (categoryId) {
                     // 检查是否已在分类中，避免重复添加
-                    const category = self.categories.find(c => c.id === categoryId);
-                    if (category && !category.videoIds.includes(video.id)) {
-                        self.addVideoToCategory(categoryId, video.id);
-                        categorizedCount++;
+                    const category = self.categories.find(function(c) { return c.id === categoryId; });
+                    if (category) {
+                        var vid = String(video.id);
+                        var alreadyIn = category.videoIds.some(function(id) {
+                            return String(id) === vid;
+                        });
+                        if (!alreadyIn) {
+                            self.addVideoToCategory(categoryId, video.id);
+                            categorizedCount++;
+                        } else {
+                            alreadyInCategoryCount++;
+                        }
+                    } else {
+                        console.warn('[自动扫描] 分类ID "' + categoryId + '" 在分类列表中未找到');
                     }
+                } else {
+                    noMatchCount++;
                 }
             });
+
+            console.log('[自动扫描] 总计 ' + allVideos.length + ' 条视频，新增分类 ' + categorizedCount + ' 条，已在分类中 ' + alreadyInCategoryCount + ' 条，无匹配 ' + noMatchCount + ' 条');
 
             if (categorizedCount > 0) {
                 this.renderCategories();
                 this.showSuccess('自动扫描完成，共新增分类 ' + categorizedCount + ' 条内容');
+            } else if (alreadyInCategoryCount > 0) {
+                this.showSuccess('自动扫描完成，符合分类的 ' + alreadyInCategoryCount + ' 条内容已在分类中');
             } else {
-                this.showSuccess('自动扫描完成，无需新增分类的内容');
+                this.showSuccess('自动扫描完成，未找到符合分类条件的视频（共扫描 ' + allVideos.length + ' 条）');
             }
         } catch (error) {
             console.error('自动扫描分类失败:', error);
-            this.showError('自动扫描分类失败，请重试');
+            this.showError('自动扫描分类失败: ' + (error.message || error));
         }
     }
 

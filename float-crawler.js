@@ -455,20 +455,29 @@ class FloatCrawler {
 
     getAutoCategoryByTitle(title) {
         if (!title) return null;
-        
-        const lowerTitle = title.toLowerCase();
-        
+
+        // 标准化标题：统一半角括号为全角括号，避免因括号差异导致匹配失败
+        var normalizedTitle = String(title).replace(/\(/g, '（').replace(/\)/g, '）');
+
+        var categoryName = null;
+
         // 按优先级顺序检测（更具体的匹配优先）
-        if (lowerTitle.includes('硬核战双（文字版）')) {
-            return 'cat_fixed_hardcore_text';
+        if (normalizedTitle.includes('硬核战双（文字版）')) {
+            categoryName = '硬核战双（文字版）';
+        } else if (normalizedTitle.includes('硬核战双')) {
+            categoryName = '硬核战双';
+        } else if (normalizedTitle.includes('潮声回响')) {
+            categoryName = '潮声回响';
         }
-        if (lowerTitle.includes('硬核战双')) {
-            return 'cat_fixed_hardcore';
+
+        // 按名称查找分类，确保即使分类ID不一致也能正确匹配
+        if (categoryName && this.uiManager && this.uiManager.categories) {
+            var category = this.uiManager.categories.find(function(c) { return c.name === categoryName; });
+            if (category) {
+                return category.id;
+            }
         }
-        if (lowerTitle.includes('潮声回响')) {
-            return 'cat_fixed_chaosheng';
-        }
-        
+
         return null;
     }
 
