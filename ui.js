@@ -354,6 +354,7 @@ class UIManager {
 
             // 批量导入相关元素
             batchImportBtn: document.getElementById('batch-import-btn'),
+            autoScanCategoryBtn: document.getElementById('auto-scan-category-btn'),
             batchImportModal: document.getElementById('batch-import-modal'),
             closeBatchModal: document.getElementById('close-batch-modal'),
             cancelBatchModal: document.getElementById('cancel-batch-modal'),
@@ -434,6 +435,13 @@ class UIManager {
         if (this.elements.batchImportBtn) {
             this.elements.batchImportBtn.addEventListener('click', () => {
                 this.showBatchImportModal();
+            });
+        }
+
+        // 自动扫描分类按钮
+        if (this.elements.autoScanCategoryBtn) {
+            this.elements.autoScanCategoryBtn.addEventListener('click', () => {
+                this.autoScanCategorize();
             });
         }
 
@@ -1443,7 +1451,13 @@ class UIManager {
                 this.hideAddVideoModal();
                 this.showSuccess('内容更新成功');
             } else {
-                await coreService.addVideo(videoData);
+                const saved = await coreService.addVideo(videoData);
+                // 自动根据标题分类
+                const autoCategoryId = this.getAutoCategoryByTitle(videoData.title);
+                if (autoCategoryId) {
+                    this.addVideoToCategory(autoCategoryId, saved.id);
+                    this.renderCategories();
+                }
                 this.hideAddVideoModal();
                 this.showSuccess('内容添加成功');
             }
@@ -1928,6 +1942,67 @@ class UIManager {
         if (category) {
             category.videoIds = category.videoIds.filter(id => id !== videoId);
             this.saveCategories();
+        }
+    }
+
+    /**
+     * 根据视频标题自动匹配固定分类
+     * 按优先级顺序检测（更具体的匹配优先）
+     * @param {string} title - 视频标题
+     * @returns {string|null} - 匹配的分类ID，未匹配返回null
+     */
+    getAutoCategoryByTitle(title) {
+        if (!title) return null;
+
+        // 必须先检测「硬核战双（文字版）」，因为它包含「硬核战双」
+        if (title.includes('硬核战双（文字版）')) {
+            return 'cat_fixed_hardcore_text';
+        }
+        if (title.includes('硬核战双')) {
+            return 'cat_fixed_hardcore';
+        }
+        if (title.includes('潮声回响')) {
+            return 'cat_fixed_chaosheng';
+        }
+
+        return null;
+    }
+
+    /**
+     * 手动扫描所有已导入的视频，根据标题自动添加到对应分类
+     */
+    async autoScanCategorize() {
+        try {
+            const allVideos = await videoDB.getAllVideos();
+            if (allVideos.length === 0) {
+                this.showError('暂无可扫描的视频');
+                return;
+            }
+
+            let categorizedCount = 0;
+            const self = this;
+
+            allVideos.forEach(function(video) {
+                const categoryId = self.getAutoCategoryByTitle(video.title);
+                if (categoryId) {
+                    // 检查是否已在分类中，避免重复添加
+                    const category = self.categories.find(c => c.id === categoryId);
+                    if (category && !category.videoIds.includes(video.id)) {
+                        self.addVideoToCategory(categoryId, video.id);
+                        categorizedCount++;
+                    }
+                }
+            });
+
+            if (categorizedCount > 0) {
+                this.renderCategories();
+                this.showSuccess('自动扫描完成，共新增分类 ' + categorizedCount + ' 条内容');
+            } else {
+                this.showSuccess('自动扫描完成，无需新增分类的内容');
+            }
+        } catch (error) {
+            console.error('自动扫描分类失败:', error);
+            this.showError('自动扫描分类失败，请重试');
         }
     }
 
@@ -2437,7 +2512,12 @@ class UIManager {
                     failCount++;
                     continue;
                 }
-                await coreService.addVideo(videoData);
+                const saved = await coreService.addVideo(videoData);
+                // 自动根据标题分类
+                const autoCategoryId = this.getAutoCategoryByTitle(title);
+                if (autoCategoryId) {
+                    this.addVideoToCategory(autoCategoryId, saved.id);
+                }
                 successCount++;
             } catch (error) {
                 console.error(`导入失败 [${title}]:`, error);
@@ -2457,6 +2537,7 @@ class UIManager {
         // 延迟关闭
         setTimeout(() => {
             this.hideBatchImportModal();
+            this.renderCategories();
             this.renderCurrentView();
         }, 1500);
     }
