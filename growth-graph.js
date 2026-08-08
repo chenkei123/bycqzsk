@@ -1781,9 +1781,64 @@
             self.store.setState({ targetFps: parseInt(e.target.value, 10) });
         });
 
-        // 添加节点
-        document.getElementById('gg-add-node').addEventListener('click', function () {
-            self._addNode();
+        // 添加节点 - 显示下拉菜单
+        document.getElementById('gg-add-node').addEventListener('click', function (e) {
+            e.stopPropagation();
+            self._showAddNodeDropdown(this);
+        });
+
+        // 添加空白节点
+        document.getElementById('gg-add-blank-node').addEventListener('click', function () {
+            self._hideAddNodeDropdown();
+            self._addBlankNode();
+        });
+
+        // 添加已导入的视频/文章节点
+        document.getElementById('gg-add-video-node').addEventListener('click', function () {
+            self._hideAddNodeDropdown();
+            self._showVideoPicker();
+        });
+
+        // 点击外部关闭下拉菜单
+        document.addEventListener('click', function (e) {
+            var dropdown = document.getElementById('gg-add-node-dropdown');
+            var addBtn = document.getElementById('gg-add-node');
+            if (dropdown && dropdown.style.display !== 'none') {
+                if (!dropdown.contains(e.target) && e.target !== addBtn) {
+                    self._hideAddNodeDropdown();
+                }
+            }
+        });
+
+        // 视频/文章选择器：关闭按钮
+        document.getElementById('gg-video-picker-close').addEventListener('click', function () {
+            self._hideVideoPicker();
+        });
+
+        // 视频/文章选择器：点击遮罩关闭
+        document.getElementById('gg-video-picker-overlay').addEventListener('click', function (e) {
+            if (e.target === this) self._hideVideoPicker();
+        });
+
+        // 视频/文章选择器：搜索
+        document.getElementById('gg-video-picker-search').addEventListener('input', function () {
+            self._filterVideoPicker(this.value);
+        });
+
+        // 视频/文章选择器：类型滑动开关
+        document.getElementById('gg-picker-type-toggle').addEventListener('click', function () {
+            var isArticle = this.classList.contains('article');
+            if (isArticle) {
+                // 切换到视频
+                this.classList.remove('article');
+                self._pickerTypeFilter = 'video';
+            } else {
+                // 切换到文章
+                this.classList.add('article');
+                self._pickerTypeFilter = 'article';
+            }
+            var searchEl2 = document.getElementById('gg-video-picker-search');
+            self._renderVideoPickerList(searchEl2 ? searchEl2.value : '');
         });
 
         // 开始/停止生长
@@ -1914,7 +1969,35 @@
         document.getElementById('gg-stop-growth').style.display = growing ? '' : 'none';
     };
 
-    TopBar.prototype._addNode = function () {
+    TopBar.prototype._showAddNodeDropdown = function (anchorBtn) {
+        var dropdown = document.getElementById('gg-add-node-dropdown');
+        if (!dropdown) return;
+
+        // 切换显示/隐藏
+        if (dropdown.style.display !== 'none') {
+            this._hideAddNodeDropdown();
+            return;
+        }
+
+        // 定位到按钮下方
+        var rect = anchorBtn.getBoundingClientRect();
+        dropdown.style.display = 'block';
+        var dropdownRect = dropdown.getBoundingClientRect();
+        var left = rect.left;
+        // 避免超出右侧视口
+        if (left + dropdownRect.width > window.innerWidth - 8) {
+            left = window.innerWidth - dropdownRect.width - 8;
+        }
+        dropdown.style.left = left + 'px';
+        dropdown.style.top = (rect.bottom + 4) + 'px';
+    };
+
+    TopBar.prototype._hideAddNodeDropdown = function () {
+        var dropdown = document.getElementById('gg-add-node-dropdown');
+        if (dropdown) dropdown.style.display = 'none';
+    };
+
+    TopBar.prototype._addBlankNode = function () {
         // 在视口中心创建节点
         var wx = this.camera.x;
         var wy = this.camera.y;
@@ -1923,6 +2006,168 @@
         // 循环使用预设颜色
         node.color = NODE_COLOR_PRESETS[this.store.state.nodes.length % NODE_COLOR_PRESETS.length];
         this.store.addNode(node);
+        if (this._app) this._app._showHint('已添加空白节点', 1500);
+    };
+
+    /**
+     * 显示视频/文章选择器，从 videoDB 加载已导入的内容
+     */
+    TopBar.prototype._showVideoPicker = function () {
+        var self = this;
+        var overlay = document.getElementById('gg-video-picker-overlay');
+        var listEl = document.getElementById('gg-video-picker-list');
+        var searchEl = document.getElementById('gg-video-picker-search');
+        var countEl = document.getElementById('gg-video-picker-count');
+        var toggleEl = document.getElementById('gg-picker-type-toggle');
+        if (!overlay || !listEl) return;
+
+        // 清空搜索框
+        if (searchEl) searchEl.value = '';
+        // 默认显示视频
+        this._pickerTypeFilter = 'video';
+        if (toggleEl) toggleEl.classList.remove('article');
+
+        // 显示加载中
+        listEl.innerHTML = '<div class="gg-picker-empty">加载中...</div>';
+        overlay.style.display = 'flex';
+        if (countEl) countEl.textContent = '';
+
+        // 从 videoDB 加载所有视频/文章
+        initVideoDB().then(function () {
+            return videoDB.getAllVideos();
+        }).then(function (videos) {
+            self._pickerVideos = videos || [];
+            // 按添加时间倒序
+            self._pickerVideos.sort(function (a, b) { return (b.addDate || 0) - (a.addDate || 0); });
+            self._renderVideoPickerList('');
+        }).catch(function (err) {
+            console.error('加载视频列表失败:', err);
+            listEl.innerHTML = '<div class="gg-picker-empty">加载失败: ' + (err.message || err) + '</div>';
+        });
+    };
+
+    TopBar.prototype._hideVideoPicker = function () {
+        var overlay = document.getElementById('gg-video-picker-overlay');
+        if (overlay) overlay.style.display = 'none';
+        this._pickerVideos = null;
+    };
+
+    /**
+     * 渲染视频/文章选择器列表
+     */
+    TopBar.prototype._renderVideoPickerList = function (searchQuery) {
+        var self = this;
+        var listEl = document.getElementById('gg-video-picker-list');
+        var countEl = document.getElementById('gg-video-picker-count');
+        if (!listEl || !this._pickerVideos) return;
+
+        var videos = this._pickerVideos;
+
+        // 类型过滤：根据滑动开关状态筛选
+        var typeFilter = this._pickerTypeFilter || 'video';
+        videos = videos.filter(function (v) {
+            var nodeType = v.type || detectContentTypeFromUrl(v.url);
+            return nodeType === typeFilter;
+        });
+
+        // 搜索过滤
+        if (searchQuery && searchQuery.trim()) {
+            var q = searchQuery.toLowerCase().trim();
+            videos = videos.filter(function (v) {
+                return (v.title || '').toLowerCase().indexOf(q) >= 0 ||
+                       (v.desc || '').toLowerCase().indexOf(q) >= 0 ||
+                       (Array.isArray(v.tags) ? v.tags : []).some(function (t) { return String(t).toLowerCase().indexOf(q) >= 0; });
+            });
+        }
+
+        listEl.innerHTML = '';
+
+        if (videos.length === 0) {
+            listEl.innerHTML = '<div class="gg-picker-empty">暂无匹配的内容</div>';
+            if (countEl) countEl.textContent = '0 条';
+            return;
+        }
+
+        // 获取已在画布上的节点 id 集合
+        var canvasIds = {};
+        for (var i = 0; i < this.store.state.nodes.length; i++) {
+            canvasIds[this.store.state.nodes[i].id] = true;
+        }
+
+        videos.forEach(function (video, idx) {
+            var onCanvas = !!canvasIds[video.id];
+            var item = document.createElement('div');
+            item.className = 'gg-picker-item' + (onCanvas ? ' on-canvas' : '');
+
+            var nodeType = video.type || detectContentTypeFromUrl(video.url);
+            var typeLabel = nodeType === 'article' ? '文章' : '视频';
+
+            var typeEl = document.createElement('span');
+            typeEl.className = 'gg-picker-item-type ' + (nodeType === 'article' ? 'article' : 'video');
+            typeEl.textContent = typeLabel;
+
+            var titleEl = document.createElement('span');
+            titleEl.className = 'gg-picker-item-title';
+            titleEl.textContent = video.title || '未命名';
+            titleEl.title = video.title || '';
+
+            var statusEl = document.createElement('span');
+            statusEl.className = 'gg-picker-item-status';
+            statusEl.textContent = onCanvas ? '✓ 已在画布' : '+ 添加';
+
+            item.appendChild(typeEl);
+            item.appendChild(titleEl);
+            item.appendChild(statusEl);
+
+            if (!onCanvas) {
+                item.addEventListener('click', function () {
+                    self._addNodeFromVideo(video, idx);
+                });
+            }
+
+            listEl.appendChild(item);
+        });
+
+        if (countEl) {
+            countEl.textContent = videos.length + ' 条' + (searchQuery ? ' (已筛选)' : '');
+        }
+    };
+
+    TopBar.prototype._filterVideoPicker = function (query) {
+        this._renderVideoPickerList(query);
+    };
+
+    /**
+     * 从视频/文章创建节点并添加到画布
+     */
+    TopBar.prototype._addNodeFromVideo = function (video, index) {
+        var self = this;
+        // 检查是否已在画布上
+        if (this.store.findNode(video.id)) {
+            if (this._app) this._app._showHint('该内容已在画布上', 2000);
+            return;
+        }
+        var nodeIdx = this.store.state.nodes.length;
+        var node = createNodeFromVideo(video, nodeIdx);
+        // 放在视口中心
+        var wx = this.camera.x;
+        var wy = this.camera.y;
+        node.x = wx - DEFAULT_NODE_WIDTH / 2 + (Math.random() - 0.5) * 40;
+        node.y = wy - DEFAULT_NODE_HEIGHT / 2 + (Math.random() - 0.5) * 40;
+        // 循环使用预设颜色
+        node.color = NODE_COLOR_PRESETS[nodeIdx % NODE_COLOR_PRESETS.length];
+
+        this.store.addNode(node);
+
+        // 聚焦到新节点
+        this.camera.focusNode(node, 1);
+        this.camera.snapToTarget();
+
+        if (this._app) this._app._showHint('已添加「' + (video.title || '未命名') + '」到画布', 2000);
+
+        // 刷新选择器列表（标记为已在画布）
+        var searchEl = document.getElementById('gg-video-picker-search');
+        this._renderVideoPickerList(searchEl ? searchEl.value : '');
     };
 
     TopBar.prototype._exportHTML = function () {

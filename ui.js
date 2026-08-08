@@ -12,6 +12,10 @@ class UIManager {
         this.draggedVideoId = null;
         this.batchMode = false;
         this.selectedVideoIds = new Set();
+        // 分页相关
+        this.currentPage = 1;
+        this.PAGE_SIZE = 20;
+        this.allFilteredVideos = [];
     }
 
     get bilibiliCrawler() {
@@ -346,6 +350,7 @@ class UIManager {
             loadingIndicator: document.getElementById('loading-indicator'),
             
             scrollSentinel: document.getElementById('scroll-sentinel'),
+            paginationContainer: document.getElementById('pagination-container'),
 
             // 批量导入相关元素
             batchImportBtn: document.getElementById('batch-import-btn'),
@@ -390,6 +395,7 @@ class UIManager {
 
         this.elements.searchInput.addEventListener('input', (e) => {
             coreService.debouncedSearch(e.target.value, (videos) => {
+                this.currentPage = 1;
                 this.renderContent(videos);
             });
         });
@@ -399,6 +405,7 @@ class UIManager {
                 e.preventDefault();
                 var query = e.target.value;
                 coreService.performSearch(query, (videos) => {
+                    this.currentPage = 1;
                     this.renderContent(videos);
                 });
             }
@@ -605,17 +612,7 @@ class UIManager {
     }
 
     initInfiniteScroll() {
-        if ('IntersectionObserver' in window) {
-            this.intersectionObserver = new IntersectionObserver((entries) => {
-                entries.forEach(entry => {
-                    if (entry.isIntersecting && coreService.currentMode === MODE.TIMELINE) {
-                        this.loadMoreVideos();
-                    }
-                });
-            });
-
-            this.intersectionObserver.observe(this.elements.scrollSentinel);
-        }
+        // 分页模式：不使用无限滚动
     }
 
     async switchMode(mode) {
@@ -642,6 +639,7 @@ class UIManager {
         if (this.isRendering) return;
         
         this.isRendering = true;
+        this.currentPage = 1;
         this.showLoading();
 
         try {
@@ -655,15 +653,11 @@ class UIManager {
             } else if (coreService.currentQuery) {
                 videos = await this.performSearch(coreService.currentQuery);
             } else {
-                if (this.currentTypeFilter) {
-                    // 当类型过滤器激活时，获取全部内容再按类型筛选，
-                    // 避免分页或标签分组导致文章/视频被遗漏
-                    videos = await videoDB.getAllVideos();
-                } else if (coreService.currentMode === MODE.TIMELINE) {
-                    videos = await videoDB.queryVideosByDate(0, PAGINATION_CONFIG.timeline.pageSize);
-                } else {
-                    const groupedVideos = await videoDB.queryVideosGroupedByTags();
-                    videos = Object.values(groupedVideos).flatMap(group => group.videos);
+                // 分页模式：统一获取全部内容，再在前端分页
+                videos = await videoDB.getAllVideos();
+                // 时间线模式按添加时间倒序排列
+                if (coreService.currentMode === MODE.TIMELINE) {
+                    videos.sort(function(a, b) { return b.addDate - a.addDate; });
                 }
             }
 
@@ -755,6 +749,8 @@ class UIManager {
             return true;
         });
 
+        // 存储全部筛选后的视频，用于分页
+        this.allFilteredVideos = videos;
         this.currentVideos = videos;
         
         this.elements.searchResultsCount.textContent = videos.length;
@@ -763,14 +759,27 @@ class UIManager {
 
         if (videos.length === 0) {
             this.renderEmptyState();
+            this.renderPagination(0);
             return;
         }
 
+        // 计算分页
+        var totalPages = Math.ceil(videos.length / this.PAGE_SIZE);
+        if (this.currentPage > totalPages) this.currentPage = 1;
+        if (this.currentPage < 1) this.currentPage = 1;
+
+        // 获取当前页的视频
+        var startIndex = (this.currentPage - 1) * this.PAGE_SIZE;
+        var pageVideos = videos.slice(startIndex, startIndex + this.PAGE_SIZE);
+
         if (coreService.currentMode === MODE.TIMELINE) {
-            this.renderTimelineView(videos);
+            this.renderTimelineView(pageVideos);
         } else {
-            this.renderKnowledgeView(videos);
+            this.renderKnowledgeView(pageVideos);
         }
+
+        // 渲染分页控件
+        this.renderPagination(videos.length);
     }
 
     renderTimelineView(videos) {
@@ -795,6 +804,113 @@ class UIManager {
         });
 
         this.elements.contentContainer.appendChild(container);
+    }
+
+    /**
+     * 渲染分页控件
+     */
+    renderPagination(totalCount) {
+        var container = this.elements.paginationContainer;
+        if (!container) return;
+        container.innerHTML = '';
+
+        if (totalCount <= this.PAGE_SIZE) return;
+
+        var totalPages = Math.ceil(totalCount / this.PAGE_SIZE);
+        var currentPage = this.currentPage;
+
+        // 上一页按钮
+        var prevBtn = document.createElement('button');
+        prevBtn.className = 'pagination-btn';
+        prevBtn.textContent = '上一页';
+        prevBtn.disabled = currentPage <= 1;
+        prevBtn.addEventListener('click', () => {
+            if (currentPage > 1) this.goToPage(currentPage - 1);
+        });
+        container.appendChild(prevBtn);
+
+        // 计算显示的页码范围
+        var startPage = Math.max(1, currentPage - 2);
+        var endPage = Math.min(totalPages, startPage + 4);
+        if (endPage - startPage < 4) startPage = Math.max(1, endPage - 4);
+
+        // 第一页 + 省略号
+        if (startPage > 1) {
+            container.appendChild(this.createPageBtn(1, currentPage));
+            if (startPage > 2) {
+                var ellipsis1 = document.createElement('span');
+                ellipsis1.className = 'pagination-ellipsis';
+                ellipsis1.textContent = '...';
+                container.appendChild(ellipsis1);
+            }
+        }
+
+        // 页码按钮
+        for (var i = startPage; i <= endPage; i++) {
+            container.appendChild(this.createPageBtn(i, currentPage));
+        }
+
+        // 省略号 + 最后一页
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                var ellipsis2 = document.createElement('span');
+                ellipsis2.className = 'pagination-ellipsis';
+                ellipsis2.textContent = '...';
+                container.appendChild(ellipsis2);
+            }
+            container.appendChild(this.createPageBtn(totalPages, currentPage));
+        }
+
+        // 下一页按钮
+        var nextBtn = document.createElement('button');
+        nextBtn.className = 'pagination-btn';
+        nextBtn.textContent = '下一页';
+        nextBtn.disabled = currentPage >= totalPages;
+        nextBtn.addEventListener('click', () => {
+            if (currentPage < totalPages) this.goToPage(currentPage + 1);
+        });
+        container.appendChild(nextBtn);
+
+        // 页码信息
+        var info = document.createElement('span');
+        info.className = 'pagination-info';
+        info.textContent = currentPage + '/' + totalPages + ' 页 (共' + totalCount + '条)';
+        container.appendChild(info);
+    }
+
+    /**
+     * 创建页码按钮
+     */
+    createPageBtn(pageNum, currentPage) {
+        var btn = document.createElement('button');
+        btn.className = 'pagination-btn' + (pageNum === currentPage ? ' active' : '');
+        btn.textContent = pageNum;
+        btn.addEventListener('click', () => {
+            this.goToPage(pageNum);
+        });
+        return btn;
+    }
+
+    /**
+     * 跳转到指定页
+     */
+    goToPage(pageNum) {
+        this.currentPage = pageNum;
+        var startIndex = (this.currentPage - 1) * this.PAGE_SIZE;
+        var pageVideos = this.allFilteredVideos.slice(startIndex, startIndex + this.PAGE_SIZE);
+
+        this.elements.contentContainer.innerHTML = '';
+
+        if (coreService.currentMode === MODE.TIMELINE) {
+            this.renderTimelineView(pageVideos);
+        } else {
+            this.renderKnowledgeView(pageVideos);
+        }
+
+        this.renderPagination(this.allFilteredVideos.length);
+
+        // 滚动到页面顶部
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     createVideoCard(content, mode) {
@@ -1698,26 +1814,7 @@ class UIManager {
     }
 
     async loadMoreVideos() {
-        if (this.isLoadingMore) return;
-        if (this.currentTypeFilter) return; // 类型过滤时已加载全部，无需分页
-        
-        this.isLoadingMore = true;
-        this.showLoading('加载更多...');
-
-        try {
-            const currentCount = this.currentVideos.length;
-            const moreVideos = await videoDB.queryVideosByDate(currentCount, PAGINATION_CONFIG.timeline.pageSize);
-            
-            if (moreVideos.length > 0) {
-                this.currentVideos = this.currentVideos.concat(moreVideos);
-                this.renderContent(this.currentVideos);
-            }
-        } catch (error) {
-            console.error('加载更多视频失败:', error);
-        } finally {
-            this.hideLoading();
-            this.isLoadingMore = false;
-        }
+        // 分页模式：不使用无限滚动加载更多
     }
 
     showLoading(message = '加载中...') {
