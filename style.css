@@ -1678,9 +1678,50 @@ body {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    max-height: 320px;
+    max-height: 400px;
     overflow-y: auto;
     margin-bottom: 12px;
+}
+
+.float-crawler-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 15px;
+    border-top: 1px solid var(--border-color, #e5e7eb);
+    margin-top: 10px;
+    background: var(--bg-secondary, #f8fafc);
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.float-crawler-pagination button {
+    padding: 6px 12px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 6px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-primary, #334155);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.float-crawler-pagination button:hover:not(:disabled) {
+    background: var(--primary-color, #3b82f6);
+    color: #fff;
+    border-color: var(--primary-color, #3b82f6);
+}
+
+.float-crawler-pagination button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.float-crawler-pagination span {
+    font-size: 14px;
+    color: var(--text-secondary, #64748b);
+    white-space: nowrap;
 }
 
 .float-crawler-item {

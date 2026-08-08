@@ -367,7 +367,8 @@
             box-shadow: 2px 0 6px rgba(0, 0, 0, 0.08);
             z-index: 20;
             transition: width 0.3s ease, padding 0.3s ease;
-            overflow: hidden;
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
         .node-list.collapsed {
@@ -872,9 +873,12 @@
                     }
                 });
 
-                document.getElementById('auto-scan-btn').addEventListener('click', () => {
-                    if (this.isDeveloper) {
-                        this.autoScanRelationsSilent();
+                document.getElementById('auto-scan-btn').addEventListener('click', async () => {
+                    const newEdgesCount = await this.autoScanRelationsSilent();
+                    if (newEdgesCount === 0) {
+                        alert('该节点与其他节点无关联');
+                    } else {
+                        alert(`自动扫描完成，发现 ${newEdgesCount} 个新关联`);
                     }
                 });
 
@@ -1771,8 +1775,9 @@
                         this.nodes.push(customNodes[ci]);
                     }
                 }
-                await this.performAutoScanAsync();
+                const newEdgesCount = await this.performAutoScanAsync();
                 this.renderGraph();
+                return newEdgesCount;
             }
 
             async autoScanRelations() {

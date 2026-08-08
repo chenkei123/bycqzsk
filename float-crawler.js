@@ -224,8 +224,8 @@ class FloatCrawler {
                 this.pendingItems = items;
                 this.currentType = type;
                 this.populateGlobalCategoryOptions();
-                this.renderPreview();
                 this.showPreview();
+                this.renderPreview();
                 this.setStatus(`共爬取 ${items.length} 条${type === 'video' ? '视频' : '专栏'}，可编辑名称并选择分类后导入`);
                 return;
             }
@@ -271,6 +271,7 @@ class FloatCrawler {
 
     renderPreview() {
         if (!this.previewList) {
+            console.error('[FloatCrawler] previewList 元素不存在');
             return;
         }
 
@@ -283,6 +284,8 @@ class FloatCrawler {
         const startIndex = (this.currentPage - 1) * this.itemsPerPage;
         const endIndex = Math.min(startIndex + this.itemsPerPage, totalItems);
         const pageItems = this.pendingItems.slice(startIndex, endIndex);
+        
+        console.log(`[FloatCrawler] 渲染预览: 共${totalItems}条, 每页${this.itemsPerPage}条, 共${totalPages}页, 当前第${this.currentPage}页, 显示${startIndex}-${endIndex}条`);
 
         // 渲染当前页的项目
         pageItems.forEach((item, pageIndex) => {
@@ -347,7 +350,10 @@ class FloatCrawler {
 
         // 渲染分页控件
         if (totalPages > 1) {
+            console.log(`[FloatCrawler] 渲染分页控件: ${totalPages}页`);
             this.renderPagination(totalPages, totalItems);
+        } else {
+            console.log(`[FloatCrawler] 不需要分页控件: 只有${totalPages}页`);
         }
     }
 
@@ -527,8 +533,8 @@ class FloatCrawler {
                 }
                 
                 this.populateGlobalCategoryOptions();
-                this.renderPreview();
                 this.showPreview();
+                this.renderPreview();
                 this.setStatus(`从 B 站页面导入了 ${items.length} 条待确认内容，请选择分类后点击「确定导入」`);
                 console.log('[FloatCrawler] 导入内容已显示:', items.length, '条');
             }, 200);

@@ -2197,10 +2197,6 @@
         initVideoDB().then(function () {
             return videoDB.getAllVideos();
         }).then(function (videos) {
-            if (!videos || videos.length === 0) {
-                alert('数据库中暂无视频/文章');
-                return;
-            }
             // 先尝试加载已保存的总图谱（含位置和关系）
             var savedMaster = null;
             try {
@@ -2231,6 +2227,50 @@
                 newNodes.push(node);
             }
 
+            // 添加关系图谱中的自定义节点（isCustom: true）
+            var customNodeCount = 0;
+            for (var k = 0; k < existingNodes.length; k++) {
+                var savedNode = existingNodes[k];
+                if (savedNode.isCustom) {
+                    // 检查是否已存在（避免重复）
+                    var exists = false;
+                    for (var m = 0; m < newNodes.length; m++) {
+                        if (newNodes[m].id === savedNode.id) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    if (!exists) {
+                        // 转换关系图谱节点为生长线节点格式
+                        var customNode = {
+                            id: savedNode.id,
+                            title: savedNode.title || '未命名',
+                            note: savedNode.desc || '',
+                            color: savedNode.color || NODE_COLOR_PRESETS[newNodes.length % NODE_COLOR_PRESETS.length],
+                            x: savedNode.x || (100 + Math.random() * 400),
+                            y: savedNode.y || (100 + Math.random() * 300),
+                            width: DEFAULT_NODE_WIDTH,
+                            height: DEFAULT_NODE_HEIGHT,
+                            parentIds: [],
+                            childIds: [],
+                            createdAt: Date.now(),
+                            _type: savedNode.type || 'custom',
+                            _url: savedNode.url || '',
+                            _desc: savedNode.desc || '',
+                            _tags: savedNode.tags || [],
+                            isCustom: true
+                        };
+                        newNodes.push(customNode);
+                        customNodeCount++;
+                    }
+                }
+            }
+
+            if (newNodes.length === 0) {
+                alert('数据库中暂无视频/文章，且关系图谱中无自定义节点');
+                return;
+            }
+
             // 清空当前 store，将节点存入仓库而非全部显示在画布
             // 保留边数据（当节点添加到画布时，关联的边会自动生效）
             self.store.state.nodes = [];
@@ -2246,9 +2286,12 @@
             // 标记当前数据来源
             self._dataSource = 'master';
             self._updateDataSourceUI();
-            if (self._app) self._app._showHint(
-                '已导入 ' + newNodes.length + ' 个节点到仓库、' + existingEdges.length + ' 条关系\n点击左侧仓库中的节点添加到画布', 3000
-            );
+            var hintMsg = '已导入 ' + newNodes.length + ' 个节点到仓库';
+            if (customNodeCount > 0) {
+                hintMsg += '（含' + customNodeCount + '个自定义节点）';
+            }
+            hintMsg += '、' + existingEdges.length + ' 条关系\n点击左侧仓库中的节点添加到画布';
+            if (self._app) self._app._showHint(hintMsg, 3000);
         }).catch(function (err) {
             console.error('导入总图谱失败:', err);
             alert('导入失败: ' + err.message);
