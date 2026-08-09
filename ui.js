@@ -417,9 +417,12 @@ class UIManager {
             await this.renderCurrentView();
         });
 
-        // 监听视频更新事件，自动更新页面
+        // 监听视频更新事件，自动更新页面（保留当前页和滚动位置）
         coreService.addEventListener('videoUpdated', async () => {
-            await this.renderCurrentView();
+            var savedScrollY = window.scrollY;
+            await this.renderCurrentView({ preservePage: true });
+            // 恢复滚动位置，避免编辑后跳转到页面顶部
+            window.scrollTo(0, savedScrollY);
         });
 
         // 监听视频删除事件，自动更新页面
@@ -643,11 +646,14 @@ class UIManager {
     currentCategoryFilter = null;
     currentTypeFilter = null; // 'video', 'article', or null
 
-    async renderCurrentView() {
+    async renderCurrentView(options) {
         if (this.isRendering) return;
-        
+
         this.isRendering = true;
-        this.currentPage = 1;
+        // 仅在未指定保留页码时重置到第一页
+        if (!options || !options.preservePage) {
+            this.currentPage = 1;
+        }
         this.showLoading();
 
         try {
