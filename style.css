@@ -176,6 +176,39 @@ body {
     background-color: var(--bg-primary);
     border-radius: var(--border-radius);
     border: 1px solid var(--border-color);
+    position: relative;
+}
+
+.tag-cloud.collapsed {
+    max-height: 40px;
+    overflow: hidden;
+}
+
+.tag-cloud-toggle {
+    position: absolute;
+    right: var(--spacing-sm);
+    bottom: var(--spacing-sm);
+    padding: 2px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    z-index: 1;
+}
+
+.tag-cloud-toggle:hover {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.tag-cloud.collapsed .tag-cloud-toggle {
+    bottom: 4px;
+    background: var(--bg-primary);
+    box-shadow: -20px 0 10px 4px var(--bg-primary);
 }
 
 .tag {
@@ -1891,6 +1924,119 @@ body {
     white-space: nowrap;
 }
 
+.pagination-jump {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 16px;
+    gap: 6px;
+}
+
+.pagination-jump-label {
+    font-size: 14px;
+    color: #6b7280;
+    white-space: nowrap;
+}
+
+/* 输入框 + 箭头组合容器 */
+.pagination-jump-group {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pagination-jump-group:focus-within {
+    border-color: var(--primary-color, #3b82f6);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+/* 输入框 */
+.pagination-jump-input {
+    width: 54px;
+    height: 36px;
+    padding: 0 8px;
+    border: none;
+    background: transparent;
+    color: #374151;
+    font-size: 14px;
+    font-family: inherit;
+    text-align: center;
+    outline: none;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.pagination-jump-input::-webkit-inner-spin-button,
+.pagination-jump-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* 箭头按钮容器 */
+.pagination-jump-arrows {
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid #e5e7eb;
+}
+
+/* 箭头按钮 */
+.pagination-jump-arrow {
+    width: 22px;
+    flex: 1;
+    border: none;
+    background: #f9fafb;
+    color: #9ca3af;
+    font-size: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.pagination-jump-arrow:first-child {
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.pagination-jump-arrow:hover {
+    background: var(--primary-color, #3b82f6);
+    color: #fff;
+}
+
+.pagination-jump-arrow:active {
+    background: #2563eb;
+}
+
+/* 确定按钮 */
+.pagination-jump-confirm {
+    height: 36px;
+    padding: 0 18px;
+    border: 1px solid var(--primary-color, #3b82f6);
+    border-radius: 8px;
+    background: var(--primary-color, #3b82f6);
+    color: #fff;
+    font-size: 14px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.pagination-jump-confirm:hover {
+    background: #2563eb;
+    border-color: #2563eb;
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+}
+
+.pagination-jump-confirm:active {
+    background: #1d4ed8;
+    transform: translateY(1px);
+}
+
 @media (max-width: 768px) {
     .pagination-container {
         gap: 4px;
@@ -1906,6 +2052,27 @@ body {
 
     .pagination-info {
         margin-left: 8px;
+        font-size: 13px;
+    }
+
+    .pagination-jump {
+        margin-left: 8px;
+        gap: 4px;
+    }
+
+    .pagination-jump-input {
+        width: 44px;
+        height: 32px;
+        font-size: 13px;
+    }
+
+    .pagination-jump-arrow {
+        width: 18px;
+    }
+
+    .pagination-jump-confirm {
+        height: 32px;
+        padding: 0 12px;
         font-size: 13px;
     }
 }

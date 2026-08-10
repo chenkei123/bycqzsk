@@ -890,6 +890,92 @@ class UIManager {
         info.className = 'pagination-info';
         info.textContent = currentPage + '/' + totalPages + ' 页 (共' + totalCount + '条)';
         container.appendChild(info);
+
+        // 跳转输入框：输入页数后回车或点击确定跳转
+        var jumpWrap = document.createElement('div');
+        jumpWrap.className = 'pagination-jump';
+
+        var jumpLabel = document.createElement('span');
+        jumpLabel.className = 'pagination-jump-label';
+        jumpLabel.textContent = '跳至';
+        jumpWrap.appendChild(jumpLabel);
+
+        // 输入框 + 上下箭头组合容器
+        var inputGroup = document.createElement('div');
+        inputGroup.className = 'pagination-jump-group';
+
+        var jumpInput = document.createElement('input');
+        jumpInput.type = 'number';
+        jumpInput.className = 'pagination-jump-input';
+        jumpInput.min = 1;
+        jumpInput.max = totalPages;
+        jumpInput.value = currentPage;
+
+        // 向上箭头
+        var arrowUp = document.createElement('button');
+        arrowUp.className = 'pagination-jump-arrow';
+        arrowUp.type = 'button';
+        arrowUp.innerHTML = '&#9650;';
+        arrowUp.title = '上一页';
+        arrowUp.addEventListener('click', () => {
+            var v = parseInt(jumpInput.value, 10);
+            if (isNaN(v)) v = 1;
+            v = Math.min(totalPages, Math.max(1, v + 1));
+            jumpInput.value = v;
+            jumpInput.focus();
+        });
+
+        // 向下箭头
+        var arrowDown = document.createElement('button');
+        arrowDown.className = 'pagination-jump-arrow';
+        arrowDown.type = 'button';
+        arrowDown.innerHTML = '&#9660;';
+        arrowDown.title = '下一页';
+        arrowDown.addEventListener('click', () => {
+            var v = parseInt(jumpInput.value, 10);
+            if (isNaN(v)) v = 1;
+            v = Math.max(1, Math.min(totalPages, v - 1));
+            jumpInput.value = v;
+            jumpInput.focus();
+        });
+
+        // 箭头容器
+        var arrowWrap = document.createElement('div');
+        arrowWrap.className = 'pagination-jump-arrows';
+        arrowWrap.appendChild(arrowUp);
+        arrowWrap.appendChild(arrowDown);
+
+        inputGroup.appendChild(jumpInput);
+        inputGroup.appendChild(arrowWrap);
+        jumpWrap.appendChild(inputGroup);
+
+        var jumpSuffix = document.createElement('span');
+        jumpSuffix.className = 'pagination-jump-label';
+        jumpSuffix.textContent = '页';
+        jumpWrap.appendChild(jumpSuffix);
+
+        // 确定按钮
+        var jumpConfirmBtn = document.createElement('button');
+        jumpConfirmBtn.className = 'pagination-jump-confirm';
+        jumpConfirmBtn.type = 'button';
+        jumpConfirmBtn.textContent = '确定';
+        jumpConfirmBtn.addEventListener('click', () => {
+            var pageNum = parseInt(jumpInput.value, 10);
+            if (isNaN(pageNum) || pageNum < 1) pageNum = 1;
+            if (pageNum > totalPages) pageNum = totalPages;
+            this.goToPage(pageNum);
+        });
+
+        // 输入框回车也触发跳转
+        jumpInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                jumpConfirmBtn.click();
+            }
+        });
+
+        jumpWrap.appendChild(jumpConfirmBtn);
+        container.appendChild(jumpWrap);
     }
 
     /**
@@ -1398,6 +1484,23 @@ class UIManager {
 
             this.elements.tagCloud.appendChild(tagElement);
         });
+
+        // 添加折叠/展开切换按钮（默认折叠，仅显示第一行）
+        var tagCount = Object.keys(tagStats).length;
+        if (tagCount > 0) {
+            var toggleBtn = document.createElement('button');
+            toggleBtn.className = 'tag-cloud-toggle';
+            toggleBtn.type = 'button';
+            toggleBtn.textContent = '展开 ▼';
+            toggleBtn.addEventListener('click', function () {
+                var cloud = this.parentElement;
+                cloud.classList.toggle('collapsed');
+                this.textContent = cloud.classList.contains('collapsed') ? '展开 ▼' : '收起 ▲';
+            });
+            this.elements.tagCloud.appendChild(toggleBtn);
+            // 默认折叠
+            this.elements.tagCloud.classList.add('collapsed');
+        }
     }
 
     showAddVideoModal(video = null) {
