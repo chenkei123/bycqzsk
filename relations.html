@@ -695,7 +695,9 @@
                 this.nodeModal = document.getElementById('node-modal');
                 this.nodeForm = document.getElementById('node-form');
                 this.isDeveloper = this.checkDeveloperMode();
-                this.graphMode = localStorage.getItem('kb_graphMode') || 'video';
+                var savedMode = null;
+                try { savedMode = localStorage.getItem('kb_graphMode'); } catch (e) {}
+                this.graphMode = savedMode || 'video';
                 if (typeof initVideoDB === 'function') {
                     initVideoDB();
                 }
@@ -737,7 +739,11 @@
 
             setGraphMode(mode) {
                 this.graphMode = mode;
-                localStorage.setItem('kb_graphMode', mode);
+                try {
+                    localStorage.setItem('kb_graphMode', mode);
+                } catch (e) {
+                    console.warn('[setGraphMode] 保存模式到 localStorage 失败（可能超出配额）:', e);
+                }
                 this.applyGraphMode();
                 this.visibleNodeIds.clear();
                 this.renderGraph();
@@ -771,6 +777,7 @@
                         url: video.url || '',
                         desc: video.desc || '',
                         tags: video.tags || [],
+                        addDate: video.addDate || 0,
                         x: 100 + (index % 3) * 200,
                         y: 100 + Math.floor(index / 3) * 150
                     }));
@@ -928,7 +935,11 @@
                     toggleBtn.addEventListener('click', function() {
                         var isCollapsed = panel.classList.toggle('collapsed');
                         toggleBtn.textContent = isCollapsed ? '▶' : '◀';
-                        localStorage.setItem('kb_nodeListCollapsed', isCollapsed);
+                        try {
+                            localStorage.setItem('kb_nodeListCollapsed', isCollapsed);
+                        } catch (e) {
+                            console.warn('[节点列表折叠] 保存状态到 localStorage 失败（可能超出配额）:', e);
+                        }
                         // 触发大小变化,让canvas或节点重绘
                         window.dispatchEvent(new Event('resize'));
                     });
@@ -1384,7 +1395,8 @@
              * 分批加载：初始加载中心节点+直接关联，拖动画布时按需加载更多
              */
             loadMasterGraph() {
-                var raw = localStorage.getItem('gg_master_graph');
+                var raw = null;
+                try { raw = localStorage.getItem('gg_master_graph'); } catch (e) {}
                 if (!raw) {
                     alert('暂无保存的总关系图谱。\n请先在「生长线」中编辑并保存为总图谱。');
                     return;
@@ -1651,10 +1663,16 @@
                 };
                 // 如果已有保存的节点图谱数据（用户可能在生长线中修改过），不覆盖，直接跳转加载
                 var existingKey = 'gg_node_graph_' + centerId;
-                var existingData = localStorage.getItem(existingKey);
+                var existingData = null;
+                try { existingData = localStorage.getItem(existingKey); } catch (e) {}
                 if (!existingData) {
                     // 首次导出：保存关系到 localStorage
-                    localStorage.setItem(existingKey, JSON.stringify(data));
+                    try {
+                        localStorage.setItem(existingKey, JSON.stringify(data));
+                    } catch (e) {
+                        console.warn('[editInGrowthGraph] 保存节点图谱到 localStorage 失败（可能超出配额）:', e);
+                        // 即使保存失败也尝试跳转，让生长线从 URL 参数重新构建
+                    }
                 }
                 // 跳转到生长线，带 URL 参数
                 window.location.href = 'growth-graph.html?source=node&nodeId=' + encodeURIComponent(centerId);
@@ -1836,13 +1854,15 @@
 
                 // 加载已扫描记录（增量扫描）
                 var scannedKey = 'kb_scannedPairs';
-                var scannedStr = localStorage.getItem(scannedKey);
+                var scannedStr = null;
+                try { scannedStr = localStorage.getItem(scannedKey); } catch (e) {}
                 var scannedPairs = scannedStr ? JSON.parse(scannedStr) : {};
                 var scannedSet = new Set(Object.keys(scannedPairs));
 
                 // 加载上次保存图谱时已知的节点ID集合，用于增量扫描
                 var knownNodesKey = 'kb_graphKnownNodeIds';
-                var knownNodesStr = localStorage.getItem(knownNodesKey);
+                var knownNodesStr = null;
+                try { knownNodesStr = localStorage.getItem(knownNodesKey); } catch (e) {}
                 var knownNodeIds = knownNodesStr ? JSON.parse(knownNodesStr) : null;
                 // 转为 Set 以加速查找
                 var knownNodeSet = knownNodeIds ? new Set(knownNodeIds) : null;
@@ -1852,7 +1872,8 @@
                 var centerSavedAt = 0;
                 var centerNodeGraphData = null;
                 if (this.currentCenterNodeId) {
-                    var nodeGraphRaw = localStorage.getItem('gg_node_graph_' + this.currentCenterNodeId);
+                    var nodeGraphRaw = null;
+                    try { nodeGraphRaw = localStorage.getItem('gg_node_graph_' + this.currentCenterNodeId); } catch (e) {}
                     if (nodeGraphRaw) {
                         try {
                             centerNodeGraphData = JSON.parse(nodeGraphRaw);
@@ -1958,7 +1979,11 @@
                     // 每处理完一片，暂存已扫描记录并让出 UI 线程
                     var saveObj = {};
                     scannedSet.forEach(function(id) { saveObj[id] = 1; });
-                    localStorage.setItem(scannedKey, JSON.stringify(saveObj));
+                    try {
+                        localStorage.setItem(scannedKey, JSON.stringify(saveObj));
+                    } catch (e) {
+                        console.warn('[performAutoScanAsync] 保存已扫描记录失败（可能超出配额）:', e);
+                    }
                     await new Promise(function(r) { setTimeout(r, 0); });
                 }
                 return newCount;
@@ -2129,15 +2154,24 @@
                     })),
                     edges: this.edges
                 };
-                localStorage.setItem('relationsGraph', JSON.stringify(graphData));
+                try {
+                    localStorage.setItem('relationsGraph', JSON.stringify(graphData));
+                } catch (e) {
+                    console.warn('[saveGraph] 保存图谱到 localStorage 失败（可能超出配额）:', e);
+                }
 
                 // 保存当前已知节点ID集合，用于下次增量扫描
                 var knownNodeIds = this.nodes.map(function(n) { return n.id; });
-                localStorage.setItem('kb_graphKnownNodeIds', JSON.stringify(knownNodeIds));
+                try {
+                    localStorage.setItem('kb_graphKnownNodeIds', JSON.stringify(knownNodeIds));
+                } catch (e) {
+                    console.warn('[saveGraph] 保存已知节点ID失败（可能超出配额）:', e);
+                }
 
                 // 同时更新已扫描记录：将所有现有节点配对标记为已扫描
                 // 这样下次扫描时，已扫描过的配对不会被重复处理
-                var scannedStr = localStorage.getItem('kb_scannedPairs');
+                var scannedStr = null;
+                try { scannedStr = localStorage.getItem('kb_scannedPairs'); } catch (e) {}
                 var scannedPairs = scannedStr ? JSON.parse(scannedStr) : {};
                 var scannedSet = new Set(Object.keys(scannedPairs));
                 // 将当前所有节点对加入已扫描集合（仅同类型节点对）
@@ -2152,11 +2186,16 @@
                 }
                 var saveObj = {};
                 scannedSet.forEach(function(id) { saveObj[id] = 1; });
-                localStorage.setItem('kb_scannedPairs', JSON.stringify(saveObj));
+                try {
+                    localStorage.setItem('kb_scannedPairs', JSON.stringify(saveObj));
+                } catch (e) {
+                    console.warn('[saveGraph] 保存已扫描配对失败（可能超出配额）:', e);
+                }
             }
 
             loadSavedGraph() {
-                const savedGraph = localStorage.getItem('relationsGraph');
+                var savedGraph = null;
+                try { savedGraph = localStorage.getItem('relationsGraph'); } catch (e) {}
                 if (savedGraph) {
                     try {
                         const graphData = JSON.parse(savedGraph);
