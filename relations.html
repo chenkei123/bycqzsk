@@ -424,6 +424,32 @@
             z-index: 30;
         }
 
+        .node-list-refresh {
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--text-secondary);
+            user-select: none;
+            line-height: 1;
+            padding: 6px 4px;
+            border-radius: 4px;
+            transition: background 0.2s, transform 0.3s;
+            margin-right: 4px;
+        }
+
+        .node-list-refresh:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .node-list-refresh.spinning {
+            animation: refresh-spin 0.6s linear infinite;
+        }
+
+        @keyframes refresh-spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
         .node-list-header {
             display: flex;
             align-items: center;
@@ -584,6 +610,7 @@
             <div class="node-list" id="node-list-panel">
                 <div class="node-list-header">
                     <h3>可用节点</h3>
+                    <span class="node-list-refresh" id="node-list-refresh" title="刷新节点列表">⟳</span>
                     <span class="node-list-toggle" id="node-list-toggle" title="折叠/展开">◀</span>
                 </div>
                 <div class="node-list-search-wrap">
@@ -927,7 +954,8 @@
                 var panel = document.getElementById('node-list-panel');
                 if (toggleBtn && panel) {
                     // 恢复保存的状态
-                    var savedState = localStorage.getItem('kb_nodeListCollapsed');
+                    var savedState = null;
+                    try { savedState = localStorage.getItem('kb_nodeListCollapsed'); } catch (e) {}
                     if (savedState === 'true') {
                         panel.classList.add('collapsed');
                         toggleBtn.textContent = '▶';
@@ -942,6 +970,27 @@
                         }
                         // 触发大小变化,让canvas或节点重绘
                         window.dispatchEvent(new Event('resize'));
+                    });
+                }
+
+                // 可用节点刷新按钮
+                var refreshBtn = document.getElementById('node-list-refresh');
+                if (refreshBtn) {
+                    refreshBtn.addEventListener('click', async () => {
+                        refreshBtn.classList.add('spinning');
+                        try {
+                            await this.loadNodes();
+                            this.updateNodeList();
+                            this.updateNodeSelects();
+                            // 如果当前有选中的中心节点，保持其可见性
+                            if (this.currentCenterNodeId) {
+                                this.showNodeWithRelations(this.currentCenterNodeId);
+                            }
+                        } catch (e) {
+                            console.error('刷新节点列表失败:', e);
+                        } finally {
+                            refreshBtn.classList.remove('spinning');
+                        }
                     });
                 }
 
@@ -2193,51 +2242,3 @@
                 }
             }
 
-            loadSavedGraph() {
-                var savedGraph = null;
-                try { savedGraph = localStorage.getItem('relationsGraph'); } catch (e) {}
-                if (savedGraph) {
-                    try {
-                        const graphData = JSON.parse(savedGraph);
-                        // 合并保存的节点位置和当前数据库节点
-                        const savedNodes = graphData.nodes || [];
-                        const savedNodeMap = {};
-                        savedNodes.forEach(n => { savedNodeMap[n.id] = n; });
-
-                        this.nodes.forEach(node => {
-                            const saved = savedNodeMap[node.id];
-                            if (saved) {
-                                node.x = saved.x;
-                                node.y = saved.y;
-                            }
-                        });
-
-                        // 恢复自定义节点（数据库中没有的）
-                        savedNodes.forEach(saved => {
-                            if (saved.isCustom && !this.nodes.find(n => n.id === saved.id)) {
-                                this.nodes.push({ ...saved });
-                            }
-                        });
-
-                        this.edges = graphData.edges || [];
-                        this.updateNodeList();
-                        this.updateNodeSelects();
-                        this.renderGraph();
-                    } catch (error) {
-                        console.error('加载图谱失败:', error);
-                    }
-                }
-            }
-        }
-
-        // 初始化关系图谱
-        document.addEventListener('DOMContentLoaded', async () => {
-            try {
-                const graph = new RelationsGraph();
-            } catch (error) {
-                console.error('初始化关系图谱失败:', error);
-            }
-        });
-    </script>
-</body>
-</html>

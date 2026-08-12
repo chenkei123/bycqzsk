@@ -2746,16 +2746,15 @@
 
     /**
      * 加载节点中心图谱数据（从 gg_node_graph_<nodeId>）
+     * 如果 localStorage 中没有保存的数据，则尝试从 videoDB 实时构建
      */
     App.prototype._loadNodeGraphData = function (nodeId) {
-        var raw = localStorage.getItem(nodeGraphKey(nodeId));
+        var self = this;
+        var raw = null;
+        try { raw = localStorage.getItem(nodeGraphKey(nodeId)); } catch (e) {}
         if (!raw) {
-            // 没有保存的节点图谱，回退到本地草稿
-            this._showHint('暂无该节点的图谱数据，已加载本地草稿', 2500);
-            this._loadOrInitData();
-            this._dataSource = 'local';
-            this.topBar._dataSource = 'local';
-            this.topBar._updateDataSourceUI();
+            // 没有保存的节点图谱，尝试从 videoDB 实时构建该中心节点及其关联
+            this._buildNodeGraphFromDB(nodeId);
             return;
         }
         try {
@@ -2803,6 +2802,144 @@
             console.error('加载节点图谱失败', e);
             this._loadOrInitData();
         }
+    };
+
+    /**
+     * 当 localStorage 中没有保存的节点图谱时，从 videoDB 实时构建
+     */
+    App.prototype._buildNodeGraphFromDB = function (nodeId) {
+        var self = this;
+        if (typeof initVideoDB !== 'function' || typeof videoDB === 'undefined') {
+            this._showHint('暂无该节点的图谱数据，已加载本地草稿', 2500);
+            this._loadOrInitData();
+            this._dataSource = 'local';
+            this.topBar._dataSource = 'local';
+            this.topBar._updateDataSourceUI();
+            return;
+        }
+        initVideoDB().then(function () {
+            return videoDB.getAllVideos();
+        }).then(function (videos) {
+            if (!videos || videos.length === 0) {
+                self._showHint('数据库为空，已加载本地草稿', 2500);
+                self._loadOrInitData();
+                self._dataSource = 'local';
+                self.topBar._dataSource = 'local';
+                self.topBar._updateDataSourceUI();
+                return;
+            }
+            // 找到中心节点
+            var centerVideo = null;
+            for (var i = 0; i < videos.length; i++) {
+                if (videos[i].id === nodeId) { centerVideo = videos[i]; break; }
+            }
+            if (!centerVideo) {
+                self._showHint('未找到该节点，已加载本地草稿', 2500);
+                self._loadOrInitData();
+                self._dataSource = 'local';
+                self.topBar._dataSource = 'local';
+                self.topBar._updateDataSourceUI();
+                return;
+            }
+            // 构建节点列表：中心节点 + 同类型节点（用于自动扫描关系）
+            var centerType = centerVideo.type || detectContentTypeFromUrl(centerVideo.url);
+            var nodes = [];
+            var videoMap = {};
+            for (var j = 0; j < videos.length; j++) {
+                var v = videos[j];
+                var vType = v.type || detectContentTypeFromUrl(v.url);
+                if (vType !== centerType) continue; // 只保留同类型节点
+                var node = createNodeFromVideo(v, nodes.length);
+                nodes.push(node);
+                videoMap[v.id] = node;
+            }
+            // 自动扫描关系（复用关系图谱的 detectRelation 逻辑）
+            var edges = [];
+            var existingPairs = {};
+            for (var a = 0; a < nodes.length; a++) {
+                for (var b = a + 1; b < nodes.length; b++) {
+                    var na = nodes[a];
+                    var nb = nodes[b];
+                    var pair = na.id + '|' + nb.id;
+                    var pairRev = nb.id + '|' + na.id;
+                    if (existingPairs[pair] || existingPairs[pairRev]) continue;
+                    var relation = self._detectRelationForGrowth(na, nb);
+                    if (relation) {
+                        edges.push({
+                            id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                            source: na.id,
+                            target: nb.id,
+                            note: relation,
+                            color: EDGE_COLOR_PRESETS[0],
+                            createdAt: Date.now()
+                        });
+                        existingPairs[pair] = true;
+                    }
+                }
+            }
+            // 设置到画布
+            self.store.state.nodes = nodes;
+            self.store.state.edges = edges;
+            self._rebuildReferences();
+            if (self.nodeStore && nodes.length > 0) {
+                self.nodeStore.setNodes(nodes.slice(), false);
+            }
+            // 聚焦到中心节点
+            var center = self.store.findNode(nodeId);
+            if (center) {
+                self.camera.focusNode(center, 1);
+                self.camera.snapToTarget();
+            } else if (nodes.length > 0) {
+                self.camera.fitNodes(nodes, 100);
+                self.camera.snapToTarget();
+            }
+            self._showHint('已从数据库实时构建节点图谱', 2500);
+        }).catch(function (err) {
+            console.error('从数据库构建节点图谱失败:', err);
+            self._showHint('构建节点图谱失败，已加载本地草稿', 2500);
+            self._loadOrInitData();
+            self._dataSource = 'local';
+            self.topBar._dataSource = 'local';
+            self.topBar._updateDataSourceUI();
+        });
+    };
+
+    /**
+     * 关系检测（用于生长线实时构建，复用关系图谱逻辑）
+     */
+    App.prototype._detectRelationForGrowth = function (nodeA, nodeB) {
+        var rawTagsA = nodeA._tags || [];
+        var rawTagsB = nodeB._tags || [];
+        if (!Array.isArray(rawTagsA)) rawTagsA = typeof rawTagsA === 'string' ? rawTagsA.split(',') : [];
+        if (!Array.isArray(rawTagsB)) rawTagsB = typeof rawTagsB === 'string' ? rawTagsB.split(',') : [];
+        var tagsA = rawTagsA.map(function (t) { return String(t).trim(); }).filter(function (t) { return t; });
+        var tagsB = rawTagsB.map(function (t) { return String(t).trim(); }).filter(function (t) { return t; });
+
+        var commonTags = [];
+        for (var ti = 0; ti < tagsA.length; ti++) {
+            for (var tj = 0; tj < tagsB.length; tj++) {
+                if (tagsA[ti] === tagsB[tj]) {
+                    commonTags.push(tagsA[ti]);
+                    break;
+                }
+            }
+        }
+        if (commonTags.length > 0) {
+            return '共同标签: ' + commonTags.join(', ');
+        }
+
+        var descA = (nodeA._desc || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
+        var descB = (nodeB._desc || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
+        var segsA = descA.split(/\s+/).filter(function (w) { return w.length >= 2; });
+        var segsB = descB.split(/\s+/).filter(function (w) { return w.length >= 2; });
+        var common = segsA.filter(function (w) { return segsB.indexOf(w) >= 0; });
+        if (common.length >= 2) {
+            return '描述相关: ' + common.slice(0, 3).join('、');
+        }
+        if (common.length === 1 && common[0].length >= 3) {
+            return '描述相关: ' + common[0];
+        }
+        return null;
     };
 
     App.prototype._loadOrInitData = function () {
