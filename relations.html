@@ -523,11 +523,11 @@
             background-color: var(--bg-hover);
         }
 
-        .node-item video {
+        .node-item.video {
             border-left: 3px solid var(--video-color, #e5e7eb);
         }
 
-        .node-item article {
+        .node-item.article {
             border-left: 3px solid var(--article-color, #dbeafe);
         }
 
@@ -800,7 +800,7 @@
                     this.nodes = videos.map((video, index) => ({
                         id: video.id,
                         title: video.title,
-                        type: video.type,
+                        type: video.type || 'video',
                         url: video.url || '',
                         desc: video.desc || '',
                         tags: video.tags || [],
@@ -1074,6 +1074,7 @@
             }
 
             updateNodeList() {
+                if (!this.nodeListContainer) return;
                 this.nodeListContainer.innerHTML = '';
                 var filtered = this.getFilteredNodes();
                 // 应用搜索过滤（仅搜索可用节点列表，不影响图谱显示）
@@ -1097,8 +1098,8 @@
                 }
                 filtered.forEach(node => {
                     const nodeItem = document.createElement('div');
-                    nodeItem.className = `node-item ${node.type}`;
-                    nodeItem.textContent = node.title;
+                    nodeItem.className = 'node-item ' + (node.type || '');
+                    nodeItem.textContent = node.title || '未命名';
                     nodeItem.dataset.nodeId = node.id;
                     nodeItem.addEventListener('click', () => {
                         this.showNodeWithRelations(node.id);
@@ -2242,3 +2243,51 @@
                 }
             }
 
+            loadSavedGraph() {
+                var savedGraph = null;
+                try { savedGraph = localStorage.getItem('relationsGraph'); } catch (e) {}
+                if (savedGraph) {
+                    try {
+                        const graphData = JSON.parse(savedGraph);
+                        // 合并保存的节点位置和当前数据库节点
+                        const savedNodes = graphData.nodes || [];
+                        const savedNodeMap = {};
+                        savedNodes.forEach(n => { savedNodeMap[n.id] = n; });
+
+                        this.nodes.forEach(node => {
+                            const saved = savedNodeMap[node.id];
+                            if (saved) {
+                                node.x = saved.x;
+                                node.y = saved.y;
+                            }
+                        });
+
+                        // 恢复自定义节点（数据库中没有的）
+                        savedNodes.forEach(saved => {
+                            if (saved.isCustom && !this.nodes.find(n => n.id === saved.id)) {
+                                this.nodes.push({ ...saved });
+                            }
+                        });
+
+                        this.edges = graphData.edges || [];
+                        this.updateNodeList();
+                        this.updateNodeSelects();
+                        this.renderGraph();
+                    } catch (error) {
+                        console.error('加载图谱失败:', error);
+                    }
+                }
+            }
+        }
+
+        // 初始化关系图谱
+        document.addEventListener('DOMContentLoaded', async () => {
+            try {
+                const graph = new RelationsGraph();
+            } catch (error) {
+                console.error('初始化关系图谱失败:', error);
+            }
+        });
+    </script>
+</body>
+</html>
