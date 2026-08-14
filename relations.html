@@ -743,6 +743,8 @@
                 this.applyGraphMode();
                 this.renderGraph();
                 this.loadSavedGraph();
+                // 从 IndexedDB 恢复持久化的关系数据（作为 localStorage 被清理后的双保险）
+                await this.restoreEdgesFromIndexedDB();
                 this.updateAdminUI();
                 await this.autoScanRelations();
             }
@@ -1854,52 +1856,293 @@
                 this.renderGraph();
             }
 
+            // ===== 算法配置常量 =====
+            static get SCAN_CONFIG() {
+                return {
+                    minWordLength: 2,       // 少于两个字的不参与扫描
+                    maxDFRatio: 0.3,        // 一个词出现在超过 30% 的节点中，就认为太普遍
+                    minDF: 2,               // 只出现在一个节点里的词，暂时不能形成节点间关系
+                    topN: 50,               // 每个节点最多展示 50 个相关节点
+manualStopWords: ['硬核战双', '硬核战双（文字版）', '潮声回响', '战双帕弥什', '战双', '鸣潮'],
+forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
+                };
+            }
+
+            /**
+             * 分词：将 title + desc + tags 合并后分词
+             * 过滤停用词、单字、过短词
+             * @returns {Array<string>} 分词结果数组
+             */
+            _tokenizeNode(node) {
+                var cfg = RelationsGraph.SCAN_CONFIG;
+
+                // 合并 title + desc + tags
+                var text = '';
+                if (node.title) text += node.title + ' ';
+                if (node.desc) text += node.desc + ' ';
+                if (node.tags) {
+                    var tags = Array.isArray(node.tags) ? node.tags : String(node.tags).split(',');
+                    for (var ti = 0; ti < tags.length; ti++) {
+                        text += String(tags[ti]).trim() + ' ';
+                    }
+                }
+
+                // 转小写 + 去除非文字数字字符（保留中文、英文、数字）
+                text = text.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
+
+                // 分词：按空格切分 + 中文双字/三字滑窗
+                var words = [];
+                var parts = text.split(/\s+/);
+                for (var pi = 0; pi < parts.length; pi++) {
+                    var part = parts[pi];
+                    if (!part) continue;
+                    // 英文/数字词：整词保留
+                    if (/^[a-z0-9]+$/.test(part)) {
+                        if (part.length >= cfg.minWordLength) {
+                            words.push(part);
+                        }
+                        continue;
+                    }
+                    // 中文：双字滑窗分词
+                    for (var ci = 0; ci < part.length - 1; ci++) {
+                        words.push(part.substr(ci, 2));
+                    }
+                    // 三字滑窗（对更长的中文片段）
+                    for (var ci2 = 0; ci2 < part.length - 2; ci2++) {
+                        words.push(part.substr(ci2, 3));
+                    }
+                }
+
+                // 过滤停用词
+                var stopSet = new Set(cfg.manualStopWords);
+                var forceSet = new Set(cfg.forceKeepWords);
+                words = words.filter(function(w) {
+                    if (forceSet.has(w)) return true;  // 强制保留
+                    if (stopSet.has(w)) return false;   // 停用词过滤
+                    return true;
+                });
+
+                // 去重
+                var uniqueWords = [];
+                var seen = {};
+                for (var wi = 0; wi < words.length; wi++) {
+                    if (!seen[words[wi]]) {
+                        seen[words[wi]] = true;
+                        uniqueWords.push(words[wi]);
+                    }
+                }
+                return uniqueWords;
+            }
+
+            /**
+             * 构建倒排索引：word -> [nodeIds]
+             * 同时计算 DF（每个词出现在多少节点里）
+             * 过滤普遍词（df / totalNodes > maxDFRatio）和稀有词（df < minDF）
+             * @returns {{ index: Object, idfMap: Object, nodeWords: Object }}
+             */
+            _buildInvertedIndex(nodes) {
+                var cfg = RelationsGraph.SCAN_CONFIG;
+                var totalNodes = nodes.length;
+                if (totalNodes === 0) return { index: {}, idfMap: {}, nodeWords: {} };
+
+                var nodeWords = {};   // nodeId -> [words]
+                var index = {};       // word -> [nodeIds]
+                var dfMap = {};       // word -> count
+
+                for (var i = 0; i < nodes.length; i++) {
+                    var node = nodes[i];
+                    var words = this._tokenizeNode(node);
+                    nodeWords[node.id] = words;
+                    for (var wi = 0; wi < words.length; wi++) {
+                        var word = words[wi];
+                        if (!index[word]) index[word] = [];
+                        if (index[word].indexOf(node.id) < 0) {
+                            index[word].push(node.id);
+                        }
+                    }
+                }
+
+                // 计算 DF
+                for (var w in index) {
+                    if (Object.prototype.hasOwnProperty.call(index, w)) {
+                        dfMap[w] = index[w].length;
+                    }
+                }
+
+                // 过滤普遍词和稀有词
+                var maxDF = Math.floor(totalNodes * cfg.maxDFRatio);
+                var minDF = cfg.minDF;
+                var forceSet = new Set(cfg.forceKeepWords);
+                var filteredIndex = {};
+                var idfMap = {};
+
+                for (var w2 in index) {
+                    if (!Object.prototype.hasOwnProperty.call(index, w2)) continue;
+                    var df = dfMap[w2];
+                    // 强制保留的词不过滤
+                    if (forceSet.has(w2)) {
+                        filteredIndex[w2] = index[w2];
+                        idfMap[w2] = Math.log(totalNodes / Math.max(df, 1));
+                        continue;
+                    }
+                    // 过滤普遍词
+                    if (totalNodes > 1 && df / totalNodes > cfg.maxDFRatio) {
+                        continue;
+                    }
+                    // 过滤稀有词
+                    if (df < minDF) {
+                        continue;
+                    }
+                    filteredIndex[w2] = index[w2];
+                    idfMap[w2] = Math.log(totalNodes / Math.max(df, 1));
+                }
+
+                return { index: filteredIndex, idfMap: idfMap, nodeWords: nodeWords };
+            }
+
+            /**
+             * 对每个节点，通过倒排索引查找命中节点，按共同词 IDF 分数排序
+             * 取 TopN 生成边
+             * @returns {Array<{source, target, label, score}>} 新关系列表
+             */
+            _scanWithInvertedIndex(nodes, existingPairs, scannedSet, opts) {
+                opts = opts || {};
+                var cfg = RelationsGraph.SCAN_CONFIG;
+                var topN = opts.topN || cfg.topN;
+                var centerNodeId = opts.centerNodeId || null;
+                var knownNodeSet = opts.knownNodeSet || null;
+                var centerSavedAt = opts.centerSavedAt || 0;
+
+                // 构建倒排索引
+                var idxResult = this._buildInvertedIndex(nodes);
+                var index = idxResult.index;
+                var idfMap = idxResult.idfMap;
+                var nodeWords = idxResult.nodeWords;
+
+                // 构建 nodeId -> node 的快速查找表
+                var nodeMap = {};
+                for (var ni = 0; ni < nodes.length; ni++) {
+                    nodeMap[nodes[ni].id] = nodes[ni];
+                }
+
+                var newEdges = [];
+
+                for (var i = 0; i < nodes.length; i++) {
+                    var node = nodes[i];
+                    var words = nodeWords[node.id] || [];
+                    if (words.length === 0) continue;
+
+                    // 收集该节点通过所有词命中的其他节点，累加 IDF 分数
+                    var scoreMap = {};   // nodeId -> { score, commonWords: [] }
+                    for (var wi = 0; wi < words.length; wi++) {
+                        var word = words[wi];
+                        var postings = index[word];
+                        if (!postings) continue;
+                        var idf = idfMap[word] || 1;
+                        for (var pi = 0; pi < postings.length; pi++) {
+                            var otherId = postings[pi];
+                            if (otherId === node.id) continue;
+
+                            var otherNode = nodeMap[otherId];
+                            if (!otherNode) continue;
+                            // 类型过滤：只扫同类型
+                            if (node.type && otherNode.type && node.type !== otherNode.type) continue;
+
+                            // 增量扫描过滤
+                            if (centerNodeId && centerSavedAt > 0) {
+                                var isCenterA = node.id === centerNodeId;
+                                var isCenterB = otherId === centerNodeId;
+                                if (!isCenterA && !isCenterB) continue;
+                                var otherForDate = isCenterA ? otherNode : node;
+                                var otherAddDate = otherForDate.addDate || otherForDate._addDate || 0;
+                                if (otherAddDate <= centerSavedAt) continue;
+                            } else if (knownNodeSet) {
+                                var aIsNew = !knownNodeSet.has(node.id);
+                                var bIsNew = !knownNodeSet.has(otherId);
+                                if (!aIsNew && !bIsNew) continue;
+                            }
+
+                            // 跳过已存在的关系
+                            var pair = node.id + '|' + otherId;
+                            var pairRev = otherId + '|' + node.id;
+                            if (existingPairs.has(pair) || existingPairs.has(pairRev)) continue;
+                            if (scannedSet && (scannedSet.has(pair) || scannedSet.has(pairRev))) continue;
+
+                            if (!scoreMap[otherId]) {
+                                scoreMap[otherId] = { score: 0, commonWords: [] };
+                            }
+                            scoreMap[otherId].score += idf;
+                            if (scoreMap[otherId].commonWords.indexOf(word) < 0) {
+                                scoreMap[otherId].commonWords.push(word);
+                            }
+                        }
+                    }
+
+                    // 按分数排序，取 TopN
+                    var scored = [];
+                    for (var oid in scoreMap) {
+                        if (Object.prototype.hasOwnProperty.call(scoreMap, oid)) {
+                            scored.push({ id: oid, score: scoreMap[oid].score, commonWords: scoreMap[oid].commonWords });
+                        }
+                    }
+                    scored.sort(function(a, b) { return b.score - a.score; });
+
+                    var limit = Math.min(topN, scored.length);
+                    for (var si = 0; si < limit; si++) {
+                        var item = scored[si];
+                        var pair2 = node.id + '|' + item.id;
+                        var pairRev2 = item.id + '|' + node.id;
+                        if (existingPairs.has(pair2) || existingPairs.has(pairRev2)) continue;
+
+                        var label = item.commonWords.length > 0
+                            ? '共同词: ' + item.commonWords.slice(0, 5).join('、')
+                            : '关联';
+
+                        newEdges.push({
+                            source: node.id,
+                            target: item.id,
+                            label: label,
+                            score: item.score
+                        });
+                        existingPairs.add(pair2);
+                        existingPairs.add(pairRev2);
+                    }
+                }
+
+                return newEdges;
+            }
+
             performAutoScan() {
-                var newEdgeCount = 0;
                 var existingPairs = new Set();
                 for (var ei = 0; ei < this.edges.length; ei++) {
                     var e = this.edges[ei];
                     existingPairs.add(e.source + '|' + e.target);
+                    existingPairs.add(e.target + '|' + e.source);
                 }
 
-                for (var i = 0; i < this.nodes.length; i++) {
-                    for (var j = i + 1; j < this.nodes.length; j++) {
-                        var nodeA = this.nodes[i];
-                        var nodeB = this.nodes[j];
-                        if (!nodeA || !nodeB) continue;
-
-                        // 只扫描同类型节点（视频 vs 视频，文章 vs 文章，自定义节点与所有）
-                        if (nodeA.type && nodeB.type && nodeA.type !== nodeB.type) continue;
-
-                        var pair = nodeA.id + '|' + nodeB.id;
-                        var pairRev = nodeB.id + '|' + nodeA.id;
-                        if (existingPairs.has(pair) || existingPairs.has(pairRev)) continue;
-
-                        try {
-                            var relation = this.detectRelation(nodeA, nodeB);
-                            if (relation) {
-                                this.edges.push({
-                                    id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                                    source: nodeA.id,
-                                    target: nodeB.id,
-                                    label: relation
-                                });
-                                existingPairs.add(pair);
-                                newEdgeCount++;
-                            }
-                        } catch (e) {
-                            console.warn('[自动扫描] 比对失败:', nodeA.title, nodeB.title, e);
-                        }
-                    }
+                var newEdges = this._scanWithInvertedIndex(this.nodes, existingPairs, null, {});
+                var newEdgeCount = 0;
+                for (var i = 0; i < newEdges.length; i++) {
+                    var ne = newEdges[i];
+                    this.edges.push({
+                        id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                        source: ne.source,
+                        target: ne.target,
+                        label: ne.label
+                    });
+                    newEdgeCount++;
                 }
                 return newEdgeCount;
             }
 
             async performAutoScanAsync() {
+                var cfg = RelationsGraph.SCAN_CONFIG;
+
                 var existingPairs = new Set();
                 for (var ei = 0; ei < this.edges.length; ei++) {
                     var e = this.edges[ei];
                     existingPairs.add(e.source + '|' + e.target);
+                    existingPairs.add(e.target + '|' + e.source);
                 }
 
                 // 加载已扫描记录（增量扫描）
@@ -1914,11 +2157,9 @@
                 var knownNodesStr = null;
                 try { knownNodesStr = localStorage.getItem(knownNodesKey); } catch (e) {}
                 var knownNodeIds = knownNodesStr ? JSON.parse(knownNodesStr) : null;
-                // 转为 Set 以加速查找
                 var knownNodeSet = knownNodeIds ? new Set(knownNodeIds) : null;
 
-                // ===== 生长线增量扫描：检查当前中心节点是否有已保存的节点图谱 =====
-                // 如果有，则只扫描 addDate > savedAt 的新节点与该中心节点的配对
+                // ===== 生长线增量扫描：加载中心节点已保存的节点图谱 =====
                 var centerSavedAt = 0;
                 var centerNodeGraphData = null;
                 if (this.currentCenterNodeId) {
@@ -1935,7 +2176,6 @@
                                     var gePair = ge.source + '|' + ge.target;
                                     var gePairRev = ge.target + '|' + ge.source;
                                     if (!existingPairs.has(gePair) && !existingPairs.has(gePairRev)) {
-                                        // 转换格式：生长线 edge -> 关系图谱 edge
                                         this.edges.push({
                                             id: ge.id || ('edge_gg_' + Date.now() + '_' + gei),
                                             source: ge.source,
@@ -1943,6 +2183,7 @@
                                             label: ge.note || ''
                                         });
                                         existingPairs.add(gePair);
+                                        existingPairs.add(gePairRev);
                                     }
                                 }
                             }
@@ -1952,51 +2193,16 @@
                     }
                 }
 
-                // 当前所有节点ID
-                var currentNodeIds = new Set(this.nodes.map(function(n) { return n.id; }));
+                // 使用倒排索引算法扫描
+                var newEdges = this._scanWithInvertedIndex(this.nodes, existingPairs, scannedSet, {
+                    centerNodeId: this.currentCenterNodeId || null,
+                    knownNodeSet: knownNodeSet,
+                    centerSavedAt: centerSavedAt,
+                    topN: cfg.topN
+                });
 
-                // 如果存在已保存的节点集合，则仅扫描"新节点"与所有节点的配对
-                // 否则扫描全部配对
-                var candidates = [];
-                for (var i = 0; i < this.nodes.length; i++) {
-                    for (var j = i + 1; j < this.nodes.length; j++) {
-                        var nodeA = this.nodes[i];
-                        var nodeB = this.nodes[j];
-                        if (!nodeA || !nodeB) continue;
-                        // 只扫同类型
-                        if (nodeA.type && nodeB.type && nodeA.type !== nodeB.type) continue;
-
-                        // ===== 生长线增量：如果存在中心节点的 savedAt =====
-                        // 只扫描中心节点与 addDate > savedAt 的新节点的配对
-                        if (centerSavedAt > 0 && this.currentCenterNodeId) {
-                            var isCenterA = nodeA.id === this.currentCenterNodeId;
-                            var isCenterB = nodeB.id === this.currentCenterNodeId;
-                            if (!isCenterA && !isCenterB) continue; // 不含中心节点，跳过
-                            // 另一个节点必须是新节点（addDate > savedAt）
-                            var otherNode = isCenterA ? nodeB : nodeA;
-                            var otherAddDate = otherNode.addDate || otherNode._addDate || 0;
-                            if (otherAddDate <= centerSavedAt) continue; // 旧节点，跳过
-                        } else {
-                            // 原有增量逻辑：仅扫描至少一个节点是"新节点"的配对
-                            if (knownNodeSet) {
-                                var aIsNew = !knownNodeSet.has(nodeA.id);
-                                var bIsNew = !knownNodeSet.has(nodeB.id);
-                                if (!aIsNew && !bIsNew) continue; // 两个都是旧节点，跳过
-                            }
-                        }
-
-                        var pair = nodeA.id + '|' + nodeB.id;
-                        var pairRev = nodeB.id + '|' + nodeA.id;
-                        if (existingPairs.has(pair) || existingPairs.has(pairRev)) continue;
-                        if (scannedSet.has(pair) || scannedSet.has(pairRev)) continue;
-
-                        candidates.push({ nodeA: nodeA, nodeB: nodeB, pair: pair });
-                    }
-                }
-
-                if (candidates.length === 0) {
+                if (newEdges.length === 0) {
                     if (centerSavedAt > 0) {
-                        // 有保存的节点图谱但没有新候选，提示用户
                         console.log('[增量扫描] 中心节点 ' + this.currentCenterNodeId + ' 已扫描所有新节点');
                     }
                     return 0;
@@ -2005,28 +2211,21 @@
                 // 分片异步处理，每片处理后 yield 给 UI 线程
                 var CHUNK = 50;
                 var newCount = 0;
-                for (var ci = 0; ci < candidates.length; ci += CHUNK) {
-                    var chunk = candidates.slice(ci, ci + CHUNK);
+                for (var ci = 0; ci < newEdges.length; ci += CHUNK) {
+                    var chunk = newEdges.slice(ci, ci + CHUNK);
                     for (var cj = 0; cj < chunk.length; cj++) {
                         var c = chunk[cj];
-                        try {
-                            var relation = this.detectRelation(c.nodeA, c.nodeB);
-                            if (relation) {
-                                this.edges.push({
-                                    id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                                    source: c.nodeA.id,
-                                    target: c.nodeB.id,
-                                    label: relation
-                                });
-                                existingPairs.add(c.pair);
-                                newCount++;
-                            }
-                        } catch (e) {
-                            console.warn('[自动扫描] 比对失败:', c.nodeA.title, c.nodeB.title, e);
-                        }
-                        scannedSet.add(c.pair);
+                        this.edges.push({
+                            id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                            source: c.source,
+                            target: c.target,
+                            label: c.label
+                        });
+                        existingPairs.add(c.source + '|' + c.target);
+                        existingPairs.add(c.target + '|' + c.source);
+                        scannedSet.add(c.source + '|' + c.target);
+                        newCount++;
                     }
-                    // 每处理完一片，暂存已扫描记录并让出 UI 线程
                     var saveObj = {};
                     scannedSet.forEach(function(id) { saveObj[id] = 1; });
                     try {
@@ -2039,8 +2238,11 @@
                 return newCount;
             }
 
+            /**
+             * 保留原有的 detectRelation 方法用于兼容性
+             * 新的自动扫描使用倒排索引算法，不再调用此方法
+             */
             detectRelation(nodeA, nodeB) {
-                // 安全获取标签数据并标准化
                 var rawTagsA = nodeA && nodeA.tags;
                 var rawTagsB = nodeB && nodeB.tags;
                 if (!Array.isArray(rawTagsA)) rawTagsA = typeof rawTagsA === 'string' ? rawTagsA.split(',') : [];
@@ -2048,7 +2250,6 @@
                 var tagsA = rawTagsA.map(function(t) { return String(t).trim(); }).filter(function(t) { return t; });
                 var tagsB = rawTagsB.map(function(t) { return String(t).trim(); }).filter(function(t) { return t; });
 
-                // 检查共同标签
                 var commonTags = [];
                 for (var ti = 0; ti < tagsA.length; ti++) {
                     for (var tj = 0; tj < tagsB.length; tj++) {
@@ -2063,7 +2264,6 @@
                     return '共同标签: ' + commonTags.join(', ');
                 }
 
-                // 描述关键词重叠检测：仅对比描述中的关键词
                 var descA = (nodeA.desc || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
                 var descB = (nodeB.desc || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
                 var segsA = descA.split(/\s+/).filter(function(w) { return w.length >= 2; });
@@ -2088,7 +2288,7 @@
                 if (!sourceId || !targetId || !label) return;
                 
                 this.edges.push({
-                    id: `edge_${Date.now()}`,
+                    id: 'edge_' + Date.now(),
                     source: sourceId,
                     target: targetId,
                     label: label
@@ -2101,6 +2301,9 @@
                 this.relationModal.style.display = 'none';
                 this.relationForm.reset();
                 this.renderGraph();
+
+                // 自动保存到 IndexedDB，确保手动添加的关系立即持久化
+                this._saveEdgesToIndexedDB();
             }
 
             renderGraph() {
@@ -2241,6 +2444,37 @@
                 } catch (e) {
                     console.warn('[saveGraph] 保存已扫描配对失败（可能超出配额）:', e);
                 }
+
+                // ===== 关键：将手动添加的关系持久化到 IndexedDB =====
+                // 这样即使代码更新导致 localStorage 被清理，关系数据也不会丢失
+                this._saveEdgesToIndexedDB();
+            }
+
+            /**
+             * 将边数据保存到 IndexedDB（作为代码更新后的持久化备份）
+             */
+            async _saveEdgesToIndexedDB() {
+                try {
+                    if (typeof videoDB !== 'undefined' && videoDB && videoDB.saveRelationsEdges) {
+                        await videoDB.saveRelationsEdges(this.edges);
+                    }
+                } catch (e) {
+                    console.warn('保存关系到 IndexedDB 失败:', e);
+                }
+            }
+
+            /**
+             * 从 IndexedDB 加载持久化的关系数据
+             */
+            async _loadEdgesFromIndexedDB() {
+                try {
+                    if (typeof videoDB !== 'undefined' && videoDB && videoDB.loadRelationsEdges) {
+                        return await videoDB.loadRelationsEdges();
+                    }
+                } catch (e) {
+                    console.warn('从 IndexedDB 加载关系失败:', e);
+                }
+                return [];
             }
 
             loadSavedGraph() {
@@ -2276,6 +2510,56 @@
                     } catch (error) {
                         console.error('加载图谱失败:', error);
                     }
+                }
+            }
+
+            /**
+             * 从 IndexedDB 恢复持久化的关系（在 loadSavedGraph 之后调用，作为双保险）
+             */
+            async restoreEdgesFromIndexedDB() {
+                var dbEdges = await this._loadEdgesFromIndexedDB();
+                if (!dbEdges || dbEdges.length === 0) return;
+
+                // 获取当前所有有效的节点 ID
+                var validNodeIds = new Set(this.nodes.map(function(n) { return n.id; }));
+
+                // 过滤出两端节点都存在的边，避免孤立的无效关系
+                var validEdges = dbEdges.filter(function(e) {
+                    return validNodeIds.has(e.source) && validNodeIds.has(e.target);
+                });
+
+                if (validEdges.length === 0) return;
+
+                // 合并策略：以现有 edges 为基础，补充 IndexedDB 中有但本地没有的边
+                var existingPairs = new Set();
+                for (var i = 0; i < this.edges.length; i++) {
+                    var e = this.edges[i];
+                    existingPairs.add(e.source + '|' + e.target);
+                    existingPairs.add(e.target + '|' + e.source);
+                }
+
+                var addedCount = 0;
+                for (var j = 0; j < validEdges.length; j++) {
+                    var ve = validEdges[j];
+                    var pair = ve.source + '|' + ve.target;
+                    var pairRev = ve.target + '|' + ve.source;
+                    if (!existingPairs.has(pair) && !existingPairs.has(pairRev)) {
+                        this.edges.push({
+                            id: ve.id || ('edge_db_' + Date.now() + '_' + j),
+                            source: ve.source,
+                            target: ve.target,
+                            label: ve.label || ve.note || ''
+                        });
+                        existingPairs.add(pair);
+                        addedCount++;
+                    }
+                }
+
+                if (addedCount > 0) {
+                    console.log('[restoreEdgesFromIndexedDB] 从 IndexedDB 恢复了 ' + addedCount + ' 条关系');
+                    this.updateNodeList();
+                    this.updateNodeSelects();
+                    this.renderGraph();
                 }
             }
         }

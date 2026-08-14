@@ -458,6 +458,60 @@ class VideoDatabase {
             };
         });
     }
+
+    /**
+     * 保存关系图谱的边数据（手动添加的关系）到 IndexedDB
+     */
+    async saveRelationsEdges(edges) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['videos'], 'readwrite');
+            const store = transaction.objectStore('videos');
+
+            // 使用固定的 id 存储关系数据
+            const data = {
+                id: '__kb_relations_edges__',
+                _isSystem: true,
+                edges: edges || [],
+                savedAt: Date.now()
+            };
+
+            const request = store.put(data);
+            request.onsuccess = () => {
+                console.log('关系数据保存到 IndexedDB 成功');
+                resolve();
+            };
+            request.onerror = () => {
+                console.error('关系数据保存到 IndexedDB 失败:', request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    /**
+     * 从 IndexedDB 加载关系图谱的边数据
+     */
+    async loadRelationsEdges() {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['videos'], 'readonly');
+            const store = transaction.objectStore('videos');
+            const request = store.get('__kb_relations_edges__');
+
+            request.onsuccess = () => {
+                const result = request.result;
+                if (result && result.edges) {
+                    resolve(result.edges);
+                } else {
+                    resolve([]);
+                }
+            };
+            request.onerror = () => {
+                console.error('从 IndexedDB 加载关系数据失败:', request.error);
+                reject(request.error);
+            };
+        });
+    }
 }
 
 let videoDB = null;

@@ -2782,6 +2782,48 @@
                 filteredEdges.push(e);
             }
 
+            // ===== 合并 IndexedDB 中保存的手动关系（优先级最高，不会被覆盖）=====
+            var validNodeIds = new Set(loadedNodes.map(function(n) { return n.id; }));
+            var existingPairs = {};
+            for (var ep = 0; ep < filteredEdges.length; ep++) {
+                var fe = filteredEdges[ep];
+                existingPairs[fe.source + '|' + fe.target] = true;
+                existingPairs[fe.target + '|' + fe.source] = true;
+            }
+
+            // 异步加载 IndexedDB 中的手动关系并合并
+            if (typeof videoDB !== 'undefined' && videoDB && videoDB.loadRelationsEdges) {
+                videoDB.loadRelationsEdges().then(function (savedRelations) {
+                    if (savedRelations && savedRelations.length > 0) {
+                        for (var si = 0; si < savedRelations.length; si++) {
+                            var se = savedRelations[si];
+                            // 只保留两端节点都存在的边
+                            if (!validNodeIds.has(se.source) || !validNodeIds.has(se.target)) continue;
+                            var pair = se.source + '|' + se.target;
+                            var pairRev = se.target + '|' + se.source;
+                            if (existingPairs[pair] || existingPairs[pairRev]) continue;
+
+                            filteredEdges.push({
+                                id: se.id || ('edge_saved_' + Date.now() + '_' + si),
+                                source: se.source,
+                                target: se.target,
+                                note: se.label || se.note || '',
+                                color: EDGE_COLOR_PRESETS[0],
+                                createdAt: Date.now(),
+                                _isManual: true
+                            });
+                            existingPairs[pair] = true;
+                            existingPairs[pairRev] = true;
+                        }
+                        // 更新 store 中的边
+                        self.store.state.edges = filteredEdges;
+                        self._rebuildReferences();
+                    }
+                }).catch(function (err) {
+                    console.warn('[加载节点图谱] 从 IndexedDB 合并手动关系失败:', err);
+                });
+            }
+
             this.store.state.nodes = loadedNodes;
             this.store.state.edges = filteredEdges;
             this._rebuildReferences();
@@ -2806,6 +2848,7 @@
 
     /**
      * 当 localStorage 中没有保存的节点图谱时，从 videoDB 实时构建
+     * 优先加载 IndexedDB 中保存的手动关系，然后在此基础上自动扫描补充新关系
      */
     App.prototype._buildNodeGraphFromDB = function (nodeId) {
         var self = this;
@@ -2817,9 +2860,15 @@
             this.topBar._updateDataSourceUI();
             return;
         }
-        initVideoDB().then(function () {
-            return videoDB.getAllVideos();
-        }).then(function (videos) {
+        
+        // 同时加载视频数据和已保存的关系数据
+        Promise.all([
+            initVideoDB().then(function () { return videoDB.getAllVideos(); }),
+            videoDB.loadRelationsEdges ? videoDB.loadRelationsEdges() : Promise.resolve([])
+        ]).then(function (results) {
+            var videos = results[0];
+            var savedRelations = results[1] || [];
+            
             if (!videos || videos.length === 0) {
                 self._showHint('数据库为空，已加载本地草稿', 2500);
                 self._loadOrInitData();
@@ -2853,29 +2902,48 @@
                 nodes.push(node);
                 videoMap[v.id] = node;
             }
-            // 自动扫描关系（复用关系图谱的 detectRelation 逻辑）
+            
+            // ===== 优先加载已保存的手动关系（从 IndexedDB）=====
             var edges = [];
             var existingPairs = {};
-            for (var a = 0; a < nodes.length; a++) {
-                for (var b = a + 1; b < nodes.length; b++) {
-                    var na = nodes[a];
-                    var nb = nodes[b];
-                    var pair = na.id + '|' + nb.id;
-                    var pairRev = nb.id + '|' + na.id;
-                    if (existingPairs[pair] || existingPairs[pairRev]) continue;
-                    var relation = self._detectRelationForGrowth(na, nb);
-                    if (relation) {
-                        edges.push({
-                            id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                            source: na.id,
-                            target: nb.id,
-                            note: relation,
-                            color: EDGE_COLOR_PRESETS[0],
-                            createdAt: Date.now()
-                        });
-                        existingPairs[pair] = true;
-                    }
-                }
+            var validNodeIds = new Set(nodes.map(function(n) { return n.id; }));
+            
+            // 首先加载手动保存的关系（优先级最高）
+            for (var si = 0; si < savedRelations.length; si++) {
+                var se = savedRelations[si];
+                // 只保留两端节点都存在的边
+                if (!validNodeIds.has(se.source) || !validNodeIds.has(se.target)) continue;
+                
+                var pair = se.source + '|' + se.target;
+                var pairRev = se.target + '|' + se.source;
+                if (existingPairs[pair] || existingPairs[pairRev]) continue;
+                
+                edges.push({
+                    id: se.id || ('edge_saved_' + Date.now() + '_' + si),
+                    source: se.source,
+                    target: se.target,
+                    note: se.label || se.note || '',
+                    color: EDGE_COLOR_PRESETS[0],
+                    createdAt: Date.now(),
+                    _isManual: true  // 标记为手动添加的关系
+                });
+                existingPairs[pair] = true;
+                existingPairs[pairRev] = true;
+            }
+            
+            // ===== 然后使用倒排索引算法自动扫描补充新关系 =====
+            var scanResult = self._scanWithInvertedIndexForGrowth(nodes, existingPairs);
+            for (var ai = 0; ai < scanResult.length; ai++) {
+                var ne = scanResult[ai];
+                edges.push({
+                    id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+                    source: ne.source,
+                    target: ne.target,
+                    note: ne.label,
+                    color: EDGE_COLOR_PRESETS[0],
+                    createdAt: Date.now(),
+                    _isAuto: true
+                });
             }
             // 设置到画布
             self.store.state.nodes = nodes;
@@ -2893,7 +2961,7 @@
                 self.camera.fitNodes(nodes, 100);
                 self.camera.snapToTarget();
             }
-            self._showHint('已从数据库实时构建节点图谱', 2500);
+            self._showHint('已从数据库实时构建节点图谱（保留手动关系）', 2500);
         }).catch(function (err) {
             console.error('从数据库构建节点图谱失败:', err);
             self._showHint('构建节点图谱失败，已加载本地草稿', 2500);
@@ -2905,7 +2973,169 @@
     };
 
     /**
-     * 关系检测（用于生长线实时构建，复用关系图谱逻辑）
+     * 倒排索引自动扫描算法（用于生长线实时构建）
+     * 与关系图谱的算法保持一致
+     */
+    App.prototype._scanWithInvertedIndexForGrowth = function (nodes, existingPairs) {
+        var SCAN_CFG = {
+            minWordLength: 2,
+            maxDFRatio: 0.3,
+            minDF: 2,
+            topN: 50,
+manualStopWords: ['硬核战双', '硬核战双（文字版）', '潮声回响', '战双帕弥什', '战双', '鸣潮'],
+forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
+        };
+
+        var totalNodes = nodes.length;
+        if (totalNodes === 0) return [];
+
+        // 分词函数
+        function tokenizeNode(node) {
+            var text = '';
+            if (node.title) text += node.title + ' ';
+            if (node._desc) text += node._desc + ' ';
+            if (node._tags) {
+                var tags = Array.isArray(node._tags) ? node._tags : String(node._tags).split(',');
+                for (var ti = 0; ti < tags.length; ti++) {
+                    text += String(tags[ti]).trim() + ' ';
+                }
+            }
+            text = text.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
+            var words = [];
+            var parts = text.split(/\s+/);
+            for (var pi = 0; pi < parts.length; pi++) {
+                var part = parts[pi];
+                if (!part) continue;
+                if (/^[a-z0-9]+$/.test(part)) {
+                    if (part.length >= SCAN_CFG.minWordLength) words.push(part);
+                    continue;
+                }
+                for (var ci = 0; ci < part.length - 1; ci++) {
+                    words.push(part.substr(ci, 2));
+                }
+                for (var ci2 = 0; ci2 < part.length - 2; ci2++) {
+                    words.push(part.substr(ci2, 3));
+                }
+            }
+            var stopSet = new Set(SCAN_CFG.manualStopWords);
+            var forceSet = new Set(SCAN_CFG.forceKeepWords);
+            words = words.filter(function (w) {
+                if (forceSet.has(w)) return true;
+                if (stopSet.has(w)) return false;
+                return true;
+            });
+            var unique = [];
+            var seen = {};
+            for (var wi = 0; wi < words.length; wi++) {
+                if (!seen[words[wi]]) { seen[words[wi]] = true; unique.push(words[wi]); }
+            }
+            return unique;
+        }
+
+        // 构建倒排索引
+        var nodeWords = {};
+        var index = {};
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            var words = tokenizeNode(node);
+            nodeWords[node.id] = words;
+            for (var wi = 0; wi < words.length; wi++) {
+                var word = words[wi];
+                if (!index[word]) index[word] = [];
+                if (index[word].indexOf(node.id) < 0) index[word].push(node.id);
+            }
+        }
+
+        // 过滤普遍词和稀有词，计算 IDF
+        var forceSet = new Set(SCAN_CFG.forceKeepWords);
+        var filteredIndex = {};
+        var idfMap = {};
+        for (var w in index) {
+            if (!Object.prototype.hasOwnProperty.call(index, w)) continue;
+            var df = index[w].length;
+            if (forceSet.has(w)) {
+                filteredIndex[w] = index[w];
+                idfMap[w] = Math.log(totalNodes / Math.max(df, 1));
+                continue;
+            }
+            if (totalNodes > 1 && df / totalNodes > SCAN_CFG.maxDFRatio) continue;
+            if (df < SCAN_CFG.minDF) continue;
+            filteredIndex[w] = index[w];
+            idfMap[w] = Math.log(totalNodes / Math.max(df, 1));
+        }
+
+        // 构建 nodeMap
+        var nodeMap = {};
+        for (var ni2 = 0; ni2 < nodes.length; ni2++) {
+            nodeMap[nodes[ni2].id] = nodes[ni2];
+        }
+
+        // 对每个节点，通过倒排索引查找命中节点
+        var newEdges = [];
+        for (var i2 = 0; i2 < nodes.length; i2++) {
+            var n = nodes[i2];
+            var nWords = nodeWords[n.id] || [];
+            if (nWords.length === 0) continue;
+
+            var scoreMap = {};
+            for (var wi2 = 0; wi2 < nWords.length; wi2++) {
+                var word = nWords[wi2];
+                var postings = filteredIndex[word];
+                if (!postings) continue;
+                var idf = idfMap[word] || 1;
+                for (var pi2 = 0; pi2 < postings.length; pi2++) {
+                    var otherId = postings[pi2];
+                    if (otherId === n.id) continue;
+                    var otherNode = nodeMap[otherId];
+                    if (!otherNode) continue;
+                    if (n._type && otherNode._type && n._type !== otherNode._type) continue;
+
+                    var pair = n.id + '|' + otherId;
+                    var pairRev = otherId + '|' + n.id;
+                    if (existingPairs[pair] || existingPairs[pairRev]) continue;
+
+                    if (!scoreMap[otherId]) {
+                        scoreMap[otherId] = { score: 0, commonWords: [] };
+                    }
+                    scoreMap[otherId].score += idf;
+                    if (scoreMap[otherId].commonWords.indexOf(word) < 0) {
+                        scoreMap[otherId].commonWords.push(word);
+                    }
+                }
+            }
+
+            var scored = [];
+            for (var oid in scoreMap) {
+                if (Object.prototype.hasOwnProperty.call(scoreMap, oid)) {
+                    scored.push({ id: oid, score: scoreMap[oid].score, commonWords: scoreMap[oid].commonWords });
+                }
+            }
+            scored.sort(function (a, b) { return b.score - a.score; });
+
+            var limit = Math.min(SCAN_CFG.topN, scored.length);
+            for (var si2 = 0; si2 < limit; si2++) {
+                var item = scored[si2];
+                var pair2 = n.id + '|' + item.id;
+                var pairRev2 = item.id + '|' + n.id;
+                if (existingPairs[pair2] || existingPairs[pairRev2]) continue;
+
+                newEdges.push({
+                    source: n.id,
+                    target: item.id,
+                    label: item.commonWords.length > 0
+                        ? '共同词: ' + item.commonWords.slice(0, 5).join('、')
+                        : '关联'
+                });
+                existingPairs[pair2] = true;
+                existingPairs[pairRev2] = true;
+            }
+        }
+
+        return newEdges;
+    };
+
+    /**
+     * 关系检测（用于生长线实时构建，保留用于兼容性）
      */
     App.prototype._detectRelationForGrowth = function (nodeA, nodeB) {
         var rawTagsA = nodeA._tags || [];
