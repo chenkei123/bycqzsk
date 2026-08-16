@@ -1863,20 +1863,24 @@
                     maxDFRatio: 0.3,        // 一个词出现在超过 30% 的节点中，就认为太普遍
                     minDF: 2,               // 只出现在一个节点里的词，暂时不能形成节点间关系
                     topN: 50,               // 每个节点最多展示 50 个相关节点
-manualStopWords: ['硬核战双', '硬核战双（文字版）', '潮声回响', '战双帕弥什', '战双', '鸣潮'],
-forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
+                    // 人工停用词：这些词不参与关联扫描
+                    manualStopWords: ['考据', '赏析', '合集', '硬核战双', '硬核战双（文字版）', '潮声回响', '战双帕弥什', '战双', '鸣潮'],
+                    // 人工停用短语：从节点文本中完整移除这些短语后再分词
+                    manualStopPhrases: ['考据', '赏析', '合集'],
+                    // 保护短语：长词优先分词时，这些短语作为整体保留，不被拆分
+                    protectedPhrases: ['硬核战双', '硬核战双文字版', '潮声回响', '战双帕弥什'],
+                    // 强制保留词：即使 DF 过高也不被自动停用词过滤
+                    forceKeepWords: ['硬核战双', '硬核战双文字版', '潮声回响', '战双帕弥什']
                 };
             }
 
-            /**
-             * 分词：将 title + desc + tags 合并后分词
-             * 过滤停用词、单字、过短词
-             * @returns {Array<string>} 分词结果数组
-             */
-            _tokenizeNode(node) {
-                var cfg = RelationsGraph.SCAN_CONFIG;
+            // ===== 步骤 1-2：收集节点文本 + 规范化 =====
 
-                // 合并 title + desc + tags
+            /**
+             * 收集节点的 title、desc、tags，合并为原始文本
+             * @returns {string} 合并后的原始文本
+             */
+            _collectNodeText(node) {
                 var text = '';
                 if (node.title) text += node.title + ' ';
                 if (node.desc) text += node.desc + ' ';
@@ -1886,75 +1890,411 @@ forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
                         text += String(tags[ti]).trim() + ' ';
                     }
                 }
+                return text;
+            }
 
-                // 转小写 + 去除非文字数字字符（保留中文、英文、数字）
-                text = text.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
+            /**
+             * 规范化文本：转小写 + 去除非文字数字字符（保留中文、英文、数字）
+             * @returns {string} 规范化后的文本
+             */
+            _normalizeText(text) {
+                return text.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ').trim();
+            }
 
-                // 分词：按空格切分 + 中文双字/三字滑窗
-                var words = [];
+            // ===== 步骤 3-4：统计标签、标题词、描述词的 DF + 数字后缀归一 =====
+
+            /**
+             * 对文本进行基础分词，用于 DF 统计
+             * - 英文/数字：整词
+             * - 中文：2~6 字滑窗（覆盖可能的短语）
+             * @returns {Array<string>} 基础分词结果（含重复）
+             */
+            _basicTokenize(text) {
                 var parts = text.split(/\s+/);
+                var words = [];
                 for (var pi = 0; pi < parts.length; pi++) {
                     var part = parts[pi];
                     if (!part) continue;
                     // 英文/数字词：整词保留
                     if (/^[a-z0-9]+$/.test(part)) {
-                        if (part.length >= cfg.minWordLength) {
-                            words.push(part);
-                        }
+                        words.push(part);
                         continue;
                     }
-                    // 中文：双字滑窗分词
-                    for (var ci = 0; ci < part.length - 1; ci++) {
-                        words.push(part.substr(ci, 2));
+                    // 中文：2~6 字滑窗分词（覆盖短语级匹配）
+                    var maxWin = Math.min(part.length, 6);
+                    for (var wlen = 2; wlen <= maxWin; wlen++) {
+                        for (var ci = 0; ci <= part.length - wlen; ci++) {
+                            words.push(part.substr(ci, wlen));
+                        }
                     }
-                    // 三字滑窗（对更长的中文片段）
-                    for (var ci2 = 0; ci2 < part.length - 2; ci2++) {
-                        words.push(part.substr(ci2, 3));
+                }
+                return words;
+            }
+
+            /**
+             * 数字后缀归一：将末尾的数字部分替换为 #
+             * 例如 "战双1" -> "战双#"，"第3章" -> "第#章"
+             * @returns {string} 归一后的词
+             */
+            _normalizeNumericSuffix(word) {
+                // 末尾数字归一
+                return word.replace(/\d+$/, '#');
+            }
+
+            /**
+             * 统计所有节点的 DF（Document Frequency）
+             * 分别统计标签 DF、标题词 DF、描述词 DF
+             * 对数字后缀做归一统计
+             * @returns {{ tagDF: Object, titleWordDF: Object, descWordDF: Object, allDF: Object, totalNodes: number, nodeRawTexts: Object }}
+             */
+            _computeDF(nodes) {
+                var cfg = RelationsGraph.SCAN_CONFIG;
+                var totalNodes = nodes.length;
+                var tagDF = {};       // 标签 DF
+                var titleWordDF = {}; // 标题词 DF
+                var descWordDF = {};  // 描述词 DF
+                var allDF = {};       // 合并 DF（标签 + 标题词 + 描述词）
+                var nodeRawTexts = {}; // nodeId -> 规范化后的文本
+
+                var manualStopSet = new Set(cfg.manualStopWords);
+                var protectedSet = new Set(cfg.protectedPhrases);
+
+                for (var i = 0; i < nodes.length; i++) {
+                    var node = nodes[i];
+
+                    // 1. 收集文本
+                    var rawText = this._collectNodeText(node);
+                    // 2. 规范化
+                    var normText = this._normalizeText(rawText);
+                    nodeRawTexts[node.id] = normText;
+
+                    // 统计该节点的词集合（去重，用于 DF）
+                    var nodeWordSet = {};
+
+                    // 3a. 标签 DF
+                    var tags = Array.isArray(node.tags) ? node.tags : (node.tags ? String(node.tags).split(',') : []);
+                    for (var ti = 0; ti < tags.length; ti++) {
+                        var tag = String(tags[ti]).trim().toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, '');
+                        if (!tag || tag.length < cfg.minWordLength) continue;
+                        if (manualStopSet.has(tag)) continue;
+                        // 标签作为整体词
+                        tagDF[tag] = (tagDF[tag] || 0) + 1;
+                        nodeWordSet[tag] = true;
+                        // 数字后缀归一
+                        var normTag = this._normalizeNumericSuffix(tag);
+                        if (normTag !== tag) {
+                            tagDF[normTag] = (tagDF[normTag] || 0) + 1;
+                            nodeWordSet[normTag] = true;
+                        }
+                    }
+
+                    // 3b. 标题词 DF
+                    if (node.title) {
+                        var titleNorm = this._normalizeText(node.title);
+                        var titleWords = this._basicTokenize(titleNorm);
+                        var titleSeen = {};
+                        for (var twi = 0; twi < titleWords.length; twi++) {
+                            var tw = titleWords[twi];
+                            if (titleSeen[tw]) continue;
+                            titleSeen[tw] = true;
+                            if (manualStopSet.has(tw)) continue;
+                            titleWordDF[tw] = (titleWordDF[tw] || 0) + 1;
+                            nodeWordSet[tw] = true;
+                            // 数字后缀归一
+                            var normTW = this._normalizeNumericSuffix(tw);
+                            if (normTW !== tw) {
+                                titleWordDF[normTW] = (titleWordDF[normTW] || 0) + 1;
+                                nodeWordSet[normTW] = true;
+                            }
+                        }
+                    }
+
+                    // 3c. 描述词 DF
+                    if (node.desc) {
+                        var descNorm = this._normalizeText(node.desc);
+                        var descWords = this._basicTokenize(descNorm);
+                        var descSeen = {};
+                        for (var dwi = 0; dwi < descWords.length; dwi++) {
+                            var dw = descWords[dwi];
+                            if (descSeen[dw]) continue;
+                            descSeen[dw] = true;
+                            if (manualStopSet.has(dw)) continue;
+                            descWordDF[dw] = (descWordDF[dw] || 0) + 1;
+                            nodeWordSet[dw] = true;
+                            // 数字后缀归一
+                            var normDW = this._normalizeNumericSuffix(dw);
+                            if (normDW !== dw) {
+                                descWordDF[normDW] = (descWordDF[normDW] || 0) + 1;
+                                nodeWordSet[normDW] = true;
+                            }
+                        }
+                    }
+
+                    // 合并到 allDF
+                    for (var w in nodeWordSet) {
+                        if (Object.prototype.hasOwnProperty.call(nodeWordSet, w)) {
+                            allDF[w] = (allDF[w] || 0) + 1;
+                        }
                     }
                 }
 
-                // 过滤停用词
-                var stopSet = new Set(cfg.manualStopWords);
+                return {
+                    tagDF: tagDF,
+                    titleWordDF: titleWordDF,
+                    descWordDF: descWordDF,
+                    allDF: allDF,
+                    totalNodes: totalNodes,
+                    nodeRawTexts: nodeRawTexts
+                };
+            }
+
+            // ===== 步骤 5：自动生成 autoStopWords 和 autoStopPhrases =====
+
+            /**
+             * 根据 DF 统计结果，自动生成停用词和停用短语
+             * - DF / totalNodes > maxDFRatio 的词加入 autoStopWords
+             * - 保护短语不加入停用词
+             * @returns {{ autoStopWords: Array, autoStopPhrases: Array }}
+             */
+            _generateAutoStopWords(dfResult) {
+                var cfg = RelationsGraph.SCAN_CONFIG;
+                var allDF = dfResult.allDF;
+                var totalNodes = dfResult.totalNodes;
+                var maxDFRatio = cfg.maxDFRatio;
+
                 var forceSet = new Set(cfg.forceKeepWords);
-                words = words.filter(function(w) {
-                    if (forceSet.has(w)) return true;  // 强制保留
-                    if (stopSet.has(w)) return false;   // 停用词过滤
+                var protectedSet = new Set(cfg.protectedPhrases);
+                var manualStopSet = new Set(cfg.manualStopWords);
+
+                var autoStopWords = [];
+                var autoStopPhrases = [];
+
+                if (totalNodes <= 1) {
+                    return { autoStopWords: [], autoStopPhrases: [] };
+                }
+
+                var maxDF = Math.floor(totalNodes * maxDFRatio);
+
+                for (var w in allDF) {
+                    if (!Object.prototype.hasOwnProperty.call(allDF, w)) continue;
+                    var df = allDF[w];
+
+                    // 保护短语和强制保留词不过滤
+                    if (forceSet.has(w) || protectedSet.has(w)) continue;
+                    // 人工停用词已在前面过滤，不重复加入
+                    if (manualStopSet.has(w)) continue;
+
+                    // DF 超过阈值 -> 自动停用词
+                    if (df / totalNodes > maxDFRatio) {
+                        autoStopWords.push(w);
+                        // 长度 >= 3 的也加入停用短语
+                        if (w.length >= 3) {
+                            autoStopPhrases.push(w);
+                        }
+                    }
+                }
+
+                return {
+                    autoStopWords: autoStopWords,
+                    autoStopPhrases: autoStopPhrases
+                };
+            }
+
+            // ===== 步骤 6：为每个节点生成 validTokens =====
+
+            /**
+             * 为单个节点生成有效词列表
+             * 6.1 移除 autoStopPhrases
+             * 6.2 保护 protectedPhrases
+             * 6.3 长词优先分词
+             * 6.4 过滤 stopWords / autoStopWords
+             * 6.5 过滤短词和纯数字
+             * @returns {Array<string>} 有效词列表
+             */
+            _generateValidTokens(node, normText, stopWordSet, autoStopWordSet, stopPhraseList) {
+                var cfg = RelationsGraph.SCAN_CONFIG;
+                var protectedSet = new Set(cfg.protectedPhrases);
+                var forceSet = new Set(cfg.forceKeepWords);
+
+                // 6.1 移除 autoStopPhrases 和 manualStopPhrases
+                var text = normText;
+                var allStopPhrases = stopPhraseList.concat(cfg.manualStopPhrases || []);
+                // 按长度降序排列，优先移除长短语
+                allStopPhrases.sort(function(a, b) { return b.length - a.length; });
+                for (var si = 0; si < allStopPhrases.length; si++) {
+                    var phrase = allStopPhrases[si];
+                    if (phrase && text.indexOf(phrase) >= 0) {
+                        text = text.split(phrase).join(' ');
+                    }
+                }
+
+                // 6.2 提取 protectedPhrases：先从文本中标记出保护短语
+                var foundProtected = [];
+                // 按长度降序排列，优先匹配长短语
+                var sortedProtected = (cfg.protectedPhrases || []).slice().sort(function(a, b) { return b.length - a.length; });
+                var protectMaskedText = text;
+                for (var pi = 0; pi < sortedProtected.length; pi++) {
+                    var pp = sortedProtected[pi];
+                    while (protectMaskedText.indexOf(pp) >= 0) {
+                        foundProtected.push(pp);
+                        // 用占位符替换，避免被重复匹配或被滑窗拆分
+                        protectMaskedText = protectMaskedText.replace(pp, ' \u0001 ');
+                    }
+                }
+
+                // 6.3 长词优先分词
+                // 对移除了保护短语后的文本，用滑窗分词，长词优先
+                var tokens = this._longWordFirstTokenize(protectMaskedText, cfg.minWordLength);
+
+                // 将保护短语加回 tokens
+                for (var fpi = 0; fpi < foundProtected.length; fpi++) {
+                    tokens.push(foundProtected[fpi]);
+                }
+
+                // 6.4 过滤停用词
+                tokens = tokens.filter(function(w) {
+                    if (forceSet.has(w)) return true;       // 强制保留
+                    if (stopWordSet.has(w)) return false;    // 人工停用词
+                    if (autoStopWordSet.has(w)) return false; // 自动停用词
+                    return true;
+                });
+
+                // 6.5 过滤短词和纯数字
+                tokens = tokens.filter(function(w) {
+                    if (w.length < cfg.minWordLength) return false;
+                    if (/^\d+$/.test(w)) return false;  // 纯数字
+                    if (w === '\u0001') return false;     // 占位符
                     return true;
                 });
 
                 // 去重
-                var uniqueWords = [];
+                var unique = [];
                 var seen = {};
-                for (var wi = 0; wi < words.length; wi++) {
-                    if (!seen[words[wi]]) {
-                        seen[words[wi]] = true;
-                        uniqueWords.push(words[wi]);
+                for (var ui = 0; ui < tokens.length; ui++) {
+                    if (!seen[tokens[ui]]) {
+                        seen[tokens[ui]] = true;
+                        unique.push(tokens[ui]);
                     }
                 }
-                return uniqueWords;
+                return unique;
             }
 
             /**
-             * 构建倒排索引：word -> [nodeIds]
-             * 同时计算 DF（每个词出现在多少节点里）
-             * 过滤普遍词（df / totalNodes > maxDFRatio）和稀有词（df < minDF）
-             * @returns {{ index: Object, idfMap: Object, nodeWords: Object }}
+             * 长词优先分词策略
+             * 1. 先尝试匹配 4~6 字窗口
+             * 2. 再对剩余部分用 2~3 字窗口
+             * 这样可以优先保留长词，避免把「硬核战双」拆成「硬核」「战双」
+             * @returns {Array<string>}
+             */
+            _longWordFirstTokenize(text, minLen) {
+                var tokens = [];
+                var parts = text.split(/\s+/);
+
+                for (var pi = 0; pi < parts.length; pi++) {
+                    var part = parts[pi];
+                    if (!part || part === '\u0001') continue;
+
+                    // 英文/数字：整词
+                    if (/^[a-z0-9]+$/.test(part)) {
+                        if (part.length >= minLen) {
+                            tokens.push(part);
+                        }
+                        continue;
+                    }
+
+                    // 中文长词优先分词
+                    // 第一轮：尝试 6→4 字窗口
+                    var remaining = part;
+                    // 标记已消费的位置
+                    var consumed = new Array(part.length).fill(false);
+
+                    // 从长到短尝试窗口
+                    for (var wlen = 6; wlen >= 4; wlen--) {
+                        for (var ci = 0; ci <= part.length - wlen; ci++) {
+                            // 检查这个窗口内的字符是否都未被消费
+                            var allFree = true;
+                            for (var ck = ci; ck < ci + wlen; ck++) {
+                                if (consumed[ck]) { allFree = false; break; }
+                            }
+                            if (!allFree) continue;
+                            var sub = part.substr(ci, wlen);
+                            tokens.push(sub);
+                            for (var mk = ci; mk < ci + wlen; mk++) {
+                                consumed[mk] = true;
+                            }
+                        }
+                    }
+
+                    // 第二轮：对未消费的剩余字符用 2~3 字窗口
+                    for (var ci2 = 0; ci2 <= part.length - 2; ci2++) {
+                        if (consumed[ci2]) continue;
+                        // 找连续未消费的段
+                        var segStart = ci2;
+                        var segEnd = ci2;
+                        while (segEnd < part.length && !consumed[segEnd]) {
+                            segEnd++;
+                        }
+                        var seg = part.substring(segStart, segEnd);
+                        // 对剩余段用 3 字窗口优先
+                        for (var s3 = 0; s3 <= seg.length - 3; s3++) {
+                            tokens.push(seg.substr(s3, 3));
+                        }
+                        // 再用 2 字窗口
+                        for (var s2 = 0; s2 <= seg.length - 2; s2++) {
+                            tokens.push(seg.substr(s2, 2));
+                        }
+                        // 跳过已处理的
+                        ci2 = segEnd - 1;
+                    }
+                }
+
+                return tokens;
+            }
+
+            // ===== 步骤 7：用 validTokens 建立倒排索引 =====
+
+            /**
+             * 为所有节点生成 validTokens 并构建倒排索引
+             * 同时计算 IDF
+             * @returns {{ index: Object, idfMap: Object, nodeValidTokens: Object, autoStopWords: Set, autoStopPhrases: Array }}
              */
             _buildInvertedIndex(nodes) {
                 var cfg = RelationsGraph.SCAN_CONFIG;
                 var totalNodes = nodes.length;
-                if (totalNodes === 0) return { index: {}, idfMap: {}, nodeWords: {} };
+                if (totalNodes === 0) {
+                    return { index: {}, idfMap: {}, nodeValidTokens: {}, autoStopWords: new Set(), autoStopPhrases: [] };
+                }
 
-                var nodeWords = {};   // nodeId -> [words]
-                var index = {};       // word -> [nodeIds]
+                // 步骤 3-4：统计 DF
+                var dfResult = this._computeDF(nodes);
+
+                // 步骤 5：生成自动停用词
+                var autoStop = this._generateAutoStopWords(dfResult);
+                var autoStopWordSet = new Set(autoStop.autoStopWords);
+                var autoStopPhraseList = autoStop.autoStopPhrases;
+
+                // 人工停用词集合
+                var manualStopSet = new Set(cfg.manualStopWords);
+                var combinedStopSet = new Set();
+                manualStopSet.forEach(function(w) { combinedStopSet.add(w); });
+                autoStopWordSet.forEach(function(w) { combinedStopSet.add(w); });
+
+                // 步骤 6：为每个节点生成 validTokens
+                var nodeValidTokens = {};
+                var index = {};       // word -> Set(nodeIds)
                 var dfMap = {};       // word -> count
+                var nodeRawTexts = dfResult.nodeRawTexts;
 
                 for (var i = 0; i < nodes.length; i++) {
                     var node = nodes[i];
-                    var words = this._tokenizeNode(node);
-                    nodeWords[node.id] = words;
-                    for (var wi = 0; wi < words.length; wi++) {
-                        var word = words[wi];
+                    var normText = nodeRawTexts[node.id] || '';
+                    var validTokens = this._generateValidTokens(
+                        node, normText, manualStopSet, autoStopWordSet, autoStopPhraseList
+                    );
+                    nodeValidTokens[node.id] = validTokens;
+
+                    for (var wi = 0; wi < validTokens.length; wi++) {
+                        var word = validTokens[wi];
                         if (!index[word]) index[word] = [];
                         if (index[word].indexOf(node.id) < 0) {
                             index[word].push(node.id);
@@ -1962,47 +2302,48 @@ forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
                     }
                 }
 
-                // 计算 DF
-                for (var w in index) {
-                    if (Object.prototype.hasOwnProperty.call(index, w)) {
-                        dfMap[w] = index[w].length;
-                    }
-                }
-
-                // 过滤普遍词和稀有词
-                var maxDF = Math.floor(totalNodes * cfg.maxDFRatio);
-                var minDF = cfg.minDF;
+                // 计算 DF 和 IDF
+                var idfMap = {};
                 var forceSet = new Set(cfg.forceKeepWords);
                 var filteredIndex = {};
-                var idfMap = {};
 
-                for (var w2 in index) {
-                    if (!Object.prototype.hasOwnProperty.call(index, w2)) continue;
-                    var df = dfMap[w2];
-                    // 强制保留的词不过滤
-                    if (forceSet.has(w2)) {
-                        filteredIndex[w2] = index[w2];
-                        idfMap[w2] = Math.log(totalNodes / Math.max(df, 1));
+                for (var w in index) {
+                    if (!Object.prototype.hasOwnProperty.call(index, w)) continue;
+                    var df = index[w].length;
+
+                    // 强制保留词不过滤
+                    if (forceSet.has(w)) {
+                        filteredIndex[w] = index[w];
+                        idfMap[w] = Math.log(totalNodes / Math.max(df, 1));
                         continue;
                     }
-                    // 过滤普遍词
+
+                    // 过滤普遍词（DF 比例超阈值）
                     if (totalNodes > 1 && df / totalNodes > cfg.maxDFRatio) {
                         continue;
                     }
-                    // 过滤稀有词
-                    if (df < minDF) {
+                    // 过滤稀有词（DF < minDF）
+                    if (df < cfg.minDF) {
                         continue;
                     }
-                    filteredIndex[w2] = index[w2];
-                    idfMap[w2] = Math.log(totalNodes / Math.max(df, 1));
+
+                    filteredIndex[w] = index[w];
+                    idfMap[w] = Math.log(totalNodes / Math.max(df, 1));
                 }
 
-                return { index: filteredIndex, idfMap: idfMap, nodeWords: nodeWords };
+                return {
+                    index: filteredIndex,
+                    idfMap: idfMap,
+                    nodeValidTokens: nodeValidTokens,
+                    autoStopWords: autoStopWordSet,
+                    autoStopPhrases: autoStopPhraseList
+                };
             }
 
+            // ===== 步骤 8-12：扫描关联 =====
+
             /**
-             * 对每个节点，通过倒排索引查找命中节点，按共同词 IDF 分数排序
-             * 取 TopN 生成边
+             * 步骤 8-12：对每个节点查询相关节点，计算共同词和 score，去碎片，取 TopN
              * @returns {Array<{source, target, label, score}>} 新关系列表
              */
             _scanWithInvertedIndex(nodes, existingPairs, scannedSet, opts) {
@@ -2013,11 +2354,11 @@ forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
                 var knownNodeSet = opts.knownNodeSet || null;
                 var centerSavedAt = opts.centerSavedAt || 0;
 
-                // 构建倒排索引
+                // 步骤 7：构建倒排索引
                 var idxResult = this._buildInvertedIndex(nodes);
                 var index = idxResult.index;
                 var idfMap = idxResult.idfMap;
-                var nodeWords = idxResult.nodeWords;
+                var nodeValidTokens = idxResult.nodeValidTokens;
 
                 // 构建 nodeId -> node 的快速查找表
                 var nodeMap = {};
@@ -2029,13 +2370,14 @@ forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
 
                 for (var i = 0; i < nodes.length; i++) {
                     var node = nodes[i];
-                    var words = nodeWords[node.id] || [];
-                    if (words.length === 0) continue;
+                    var validTokens = nodeValidTokens[node.id] || [];
+                    if (validTokens.length === 0) continue;
 
-                    // 收集该节点通过所有词命中的其他节点，累加 IDF 分数
-                    var scoreMap = {};   // nodeId -> { score, commonWords: [] }
-                    for (var wi = 0; wi < words.length; wi++) {
-                        var word = words[wi];
+                    // 步骤 8：点击节点时查询相关节点
+                    // 步骤 9：计算共同词和 score
+                    var scoreMap = {};   // nodeId -> { score, commonTokens: [] }
+                    for (var wi = 0; wi < validTokens.length; wi++) {
+                        var word = validTokens[wi];
                         var postings = index[word];
                         if (!postings) continue;
                         var idf = idfMap[word] || 1;
@@ -2069,40 +2411,49 @@ forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
                             if (scannedSet && (scannedSet.has(pair) || scannedSet.has(pairRev))) continue;
 
                             if (!scoreMap[otherId]) {
-                                scoreMap[otherId] = { score: 0, commonWords: [] };
+                                scoreMap[otherId] = { score: 0, commonTokens: [] };
                             }
                             scoreMap[otherId].score += idf;
-                            if (scoreMap[otherId].commonWords.indexOf(word) < 0) {
-                                scoreMap[otherId].commonWords.push(word);
+                            if (scoreMap[otherId].commonTokens.indexOf(word) < 0) {
+                                scoreMap[otherId].commonTokens.push(word);
                             }
                         }
                     }
 
-                    // 按分数排序，取 TopN
+                    // 按分数排序
                     var scored = [];
                     for (var oid in scoreMap) {
                         if (Object.prototype.hasOwnProperty.call(scoreMap, oid)) {
-                            scored.push({ id: oid, score: scoreMap[oid].score, commonWords: scoreMap[oid].commonWords });
+                            scored.push({ id: oid, score: scoreMap[oid].score, commonTokens: scoreMap[oid].commonTokens });
                         }
                     }
                     scored.sort(function(a, b) { return b.score - a.score; });
 
-                    var limit = Math.min(topN, scored.length);
-                    for (var si = 0; si < limit; si++) {
+                    // 步骤 10：去除长词已存在时的短碎片
+                    // 如果 commonTokens 中有长词（>=4字），则移除被长词包含的短词碎片
+                    for (var si = 0; si < scored.length; si++) {
                         var item = scored[si];
-                        var pair2 = node.id + '|' + item.id;
-                        var pairRev2 = item.id + '|' + node.id;
+                        item.commonTokens = this._removeShortFragments(item.commonTokens);
+                    }
+
+                    // 步骤 11：只取 TopN
+                    var limit = Math.min(topN, scored.length);
+                    for (var si2 = 0; si2 < limit; si2++) {
+                        var item2 = scored[si2];
+                        var pair2 = node.id + '|' + item2.id;
+                        var pairRev2 = item2.id + '|' + node.id;
                         if (existingPairs.has(pair2) || existingPairs.has(pairRev2)) continue;
 
-                        var label = item.commonWords.length > 0
-                            ? '共同词: ' + item.commonWords.slice(0, 5).join('、')
+                        // 步骤 12：edge.note 只显示最终 commonTokens
+                        var label = item2.commonTokens.length > 0
+                            ? item2.commonTokens.slice(0, 5).join('、')
                             : '关联';
 
                         newEdges.push({
                             source: node.id,
-                            target: item.id,
+                            target: item2.id,
                             label: label,
-                            score: item.score
+                            score: item2.score
                         });
                         existingPairs.add(pair2);
                         existingPairs.add(pairRev2);
@@ -2110,6 +2461,39 @@ forceKeepWords: ['硬核战双', '硬核战双（文字版）', '潮声回响']
                 }
 
                 return newEdges;
+            }
+
+            /**
+             * 步骤 10 的辅助：去除短碎片
+             * 如果 commonTokens 中有长词（>=4字），则移除被该长词包含的短词（2字）
+             * 例如：如果同时有「硬核战双」和「硬核」「战双」，则移除「硬核」「战双」
+             */
+            _removeShortFragments(tokens) {
+                var longTokens = [];
+                var shortTokens = [];
+                for (var i = 0; i < tokens.length; i++) {
+                    if (tokens[i].length >= 4) {
+                        longTokens.push(tokens[i]);
+                    } else {
+                        shortTokens.push(tokens[i]);
+                    }
+                }
+                if (longTokens.length === 0) return tokens;
+
+                var result = longTokens.slice();
+                for (var si = 0; si < shortTokens.length; si++) {
+                    var isFragment = false;
+                    for (var li = 0; li < longTokens.length; li++) {
+                        if (longTokens[li].indexOf(shortTokens[si]) >= 0) {
+                            isFragment = true;
+                            break;
+                        }
+                    }
+                    if (!isFragment) {
+                        result.push(shortTokens[si]);
+                    }
+                }
+                return result;
             }
 
             performAutoScan() {
