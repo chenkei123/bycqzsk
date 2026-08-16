@@ -33,6 +33,23 @@
                         <span id="search-results-count">0</span> 个结果
                     </div>
                 </div>
+                <div id="tag-cloud-toolbar" class="tag-cloud-toolbar hidden">
+                    <div class="kw-mode-toggle" id="kw-mode-toggle">
+                        <span class="kw-mode-label label-admin active">管理员</span>
+                        <div class="toggle-track kw-toggle-track" id="kw-mode-track"><div class="toggle-thumb kw-toggle-thumb"></div></div>
+                        <span class="kw-mode-label label-user">用户</span>
+                    </div>
+                    <span class="tag-toolbar-info">共 <b id="tag-total">0</b> 个关键词</span>
+                    <label class="tag-sort-label">排序
+                        <select id="tag-sort">
+                            <option value="count">按出现次数</option>
+                            <option value="likes">按点赞数</option>
+                        </select>
+                    </label>
+                    <span id="tag-page-info" class="tag-page-info"></span>
+                    <button type="button" id="tag-prev" class="btn btn-secondary btn-sm">上一页</button>
+                    <button type="button" id="tag-next" class="btn btn-secondary btn-sm">下一页</button>
+                </div>
                 <div id="tag-cloud" class="tag-cloud hidden">
                     <!-- 标签云将在知识图谱模式下动态生成 -->
                 </div>
@@ -68,6 +85,7 @@
                 <div class="batch-toolbar-right">
                     <button type="button" id="batch-select-all-btn" class="btn btn-secondary btn-sm">全选</button>
                     <button type="button" id="batch-deselect-all-btn" class="btn btn-secondary btn-sm">全不选</button>
+                    <button type="button" id="batch-add-tags-btn" class="btn btn-primary btn-sm">批量添加关键词</button>
                     <button type="button" id="batch-delete-btn" class="btn btn-danger btn-sm">批量删除</button>
                     <button type="button" id="batch-exit-btn" class="btn btn-secondary btn-sm">退出管理</button>
                 </div>
@@ -261,6 +279,47 @@
                     <button type="button" id="batch-preview-btn" class="btn btn-primary">预览</button>
                     <button type="button" id="batch-start-btn" class="btn btn-primary hidden">开始导入</button>
                     <button type="button" id="cancel-batch-modal" class="btn btn-secondary">关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 批量添加关键词模态框 -->
+    <div id="batch-tags-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:700px;">
+            <div class="modal-header">
+                <h2>批量添加关键词</h2>
+                <button id="close-batch-tags-modal" class="close-btn">×</button>
+            </div>
+            <div class="batch-tags-body" style="padding:var(--spacing-lg);">
+                <div class="batch-tags-tip" style="margin-bottom:12px;padding:10px 14px;background:rgba(59,130,246,0.08);border-radius:8px;font-size:14px;color:var(--text-secondary);">
+                    <span style="margin-right:6px;">💡</span>
+                    点击下方链接卡片选择要添加关键词的链接，也可通过搜索链接名称快速查找。选中的链接会被高亮，在输入框中输入关键词后点击"添加关键词"即可批量添加。
+                </div>
+
+                <!-- 搜索框 -->
+                <div class="form-group" style="margin-bottom:12px;">
+                    <input type="text" id="batch-tags-search" class="search-input" style="width:100%;" placeholder="搜索链接名称...">
+                </div>
+
+                <!-- 已选计数 -->
+                <div style="margin-bottom:10px;font-size:14px;">
+                    已选择 <span id="batch-tags-selected-count" style="color:var(--primary-color);font-weight:700;">0</span> 个链接
+                    <button type="button" id="batch-tags-clear-btn" class="btn btn-secondary btn-sm" style="margin-left:8px;">清除选择</button>
+                </div>
+
+                <!-- 链接列表 -->
+                <div id="batch-tags-list" style="max-height:300px;overflow-y:auto;border:1px solid var(--border-color);border-radius:8px;padding:8px;margin-bottom:16px;"></div>
+
+                <!-- 关键词输入 -->
+                <div class="form-group">
+                    <label for="batch-tags-input">关键词（多个用逗号或换行分隔）</label>
+                    <textarea id="batch-tags-input" rows="3" placeholder="关键词1, 关键词2, 关键词3..." style="width:100%;"></textarea>
+                </div>
+
+                <div class="form-actions" style="display:flex;gap:8px;justify-content:flex-end;">
+                    <button type="button" id="cancel-batch-tags" class="btn btn-secondary">取消</button>
+                    <button type="button" id="confirm-batch-tags" class="btn btn-primary">添加关键词</button>
                 </div>
             </div>
         </div>

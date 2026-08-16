@@ -579,7 +579,6 @@
             <div class="control-panel">
                 <button id="add-relation-btn" class="btn btn-primary">添加关系</button>
                 <button id="add-node-btn" class="btn btn-primary" style="display:none;">添加节点</button>
-                <button id="auto-scan-btn" class="btn btn-secondary">自动扫描关联</button>
                 <button id="clear-all-btn" class="btn btn-secondary">清空图谱</button>
                 <button id="save-graph-btn" class="btn btn-secondary">保存图谱</button>
                 <button id="load-graph-btn" class="btn btn-secondary">加载图谱</button>
@@ -618,6 +617,13 @@
                     <span class="node-list-search-clear" id="node-list-search-clear" title="清除">&times;</span>
                 </div>
                 <div id="node-list-container"></div>
+                <div id="node-relations-panel" style="display:none;border-top:1px solid var(--border-color);padding:8px;max-height:300px;overflow-y:auto;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                        <h4 style="margin:0;font-size:13px;">当前节点关系</h4>
+                        <button type="button" id="add-relation-from-node-btn" class="btn btn-sm btn-primary" style="padding:2px 8px;font-size:11px;">从此节点添加</button>
+                    </div>
+                    <div id="node-relations-list"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -719,6 +725,9 @@
                 this.sourceNodeSelect = document.getElementById('source-node');
                 this.targetNodeSelect = document.getElementById('target-node');
                 this.relationLabelInput = document.getElementById('relation-label');
+                this.nodeRelationsPanel = document.getElementById('node-relations-panel');
+                this.nodeRelationsList = document.getElementById('node-relations-list');
+                this.addRelationFromNodeBtn = document.getElementById('add-relation-from-node-btn');
                 this.nodeModal = document.getElementById('node-modal');
                 this.nodeForm = document.getElementById('node-form');
                 this.isDeveloper = this.checkDeveloperMode();
@@ -746,7 +755,6 @@
                 // 从 IndexedDB 恢复持久化的关系数据（作为 localStorage 被清理后的双保险）
                 await this.restoreEdgesFromIndexedDB();
                 this.updateAdminUI();
-                await this.autoScanRelations();
             }
 
             updateAdminUI() {
@@ -909,15 +917,6 @@
                     }
                 });
 
-                document.getElementById('auto-scan-btn').addEventListener('click', async () => {
-                    const newEdgesCount = await this.autoScanRelationsSilent();
-                    if (newEdgesCount === 0) {
-                        alert('该节点与其他节点无关联');
-                    } else {
-                        alert(`自动扫描完成，发现 ${newEdgesCount} 个新关联`);
-                    }
-                });
-
                 document.getElementById('clear-all-btn').addEventListener('click', () => {
                     if (confirm('确定要清空图谱显示吗？已扫描的关系将保留。')) {
                         this.visibleNodeIds.clear();
@@ -941,6 +940,15 @@
                 // 在生长线中编辑当前节点图谱
                 document.getElementById('edit-in-growth-btn')?.addEventListener('click', () => {
                     this.editInGrowthGraph();
+                });
+
+                // 从当前节点添加关系（预填源节点）
+                document.getElementById('add-relation-from-node-btn')?.addEventListener('click', () => {
+                    if (!this.currentCenterNodeId) return;
+                    // 打开关系模态框，预填源节点
+                    this.updateNodeSelects();
+                    if (this.sourceNodeSelect) this.sourceNodeSelect.value = this.currentCenterNodeId;
+                    this.relationModal.style.display = 'block';
                 });
 
                 // 图谱模式切换
@@ -1215,6 +1223,7 @@
                 if (editBtn) editBtn.style.display = '';
 
                 this.renderGraph();
+                this.renderNodeRelations(nodeId);
             }
 
             /**
@@ -1620,6 +1629,92 @@
             // ===== 在生长线中编辑 =====
 
             /**
+             * HTML 转义工具
+             */
+            escapeHtml(str) {
+                if (!str) return '';
+                return String(str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+            }
+
+            /**
+             * 渲染当前节点的关系面板
+             */
+            renderNodeRelations(nodeId) {
+                if (!this.nodeRelationsPanel || !this.nodeRelationsList) return;
+                if (!nodeId) {
+                    this.nodeRelationsPanel.style.display = 'none';
+                    return;
+                }
+                var self = this;
+                var relatedEdges = this.edges.filter(function(e) {
+                    return e.source === nodeId || e.target === nodeId;
+                });
+
+                if (relatedEdges.length === 0) {
+                    this.nodeRelationsPanel.style.display = '';
+                    this.nodeRelationsList.innerHTML = '<div style="font-size:12px;color:var(--text-muted);padding:8px 0;">该节点暂无关系，点击「从此节点添加」创建</div>';
+                } else {
+                    this.nodeRelationsPanel.style.display = '';
+                    var html = '';
+                    relatedEdges.forEach(function(e) {
+                        var otherId = e.source === nodeId ? e.target : e.source;
+                        var otherNode = self.nodes.find(function(n) { return n.id === otherId; });
+                        var otherTitle = otherNode ? (otherNode.title || otherNode.id) : otherId;
+                        var relText = e.label || e.note || '';
+                        html += '<div class="node-relation-item" style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border-color);font-size:12px;">' +
+                            '<span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="' + self.escapeHtml(otherTitle) + '">' + self.escapeHtml(otherTitle) + '</span>' +
+                            '<input type="text" class="rel-edit-input" value="' + self.escapeHtml(relText) + '" data-edge-id="' + e.id + '" style="flex:1;min-width:60px;max-width:120px;font-size:11px;padding:2px 4px;border:1px solid var(--border-color);border-radius:3px;background:var(--bg-primary);color:var(--text-primary);">' +
+                            '<button type="button" class="btn btn-sm btn-secondary rel-edit-btn" data-edge-id="' + e.id + '" style="padding:1px 6px;font-size:10px;">保存</button>' +
+                            '<button type="button" class="btn btn-sm btn-secondary rel-delete-btn" data-edge-id="' + e.id + '" style="padding:1px 6px;font-size:10px;color:var(--danger-color,#ef4444);">删除</button>' +
+                            '</div>';
+                    });
+                    this.nodeRelationsList.innerHTML = html;
+
+                    // 编辑保存
+                    this.nodeRelationsList.querySelectorAll('.rel-edit-btn').forEach(function(btn) {
+                        btn.addEventListener('click', function() {
+                            var edgeId = btn.dataset.edgeId;
+                            var input = self.nodeRelationsList.querySelector('.rel-edit-input[data-edge-id="' + edgeId + '"]');
+                            if (!input) return;
+                            var newLabel = input.value.trim();
+                            var edge = self.edges.find(function(e) { return e.id === edgeId; });
+                            if (!edge) return;
+                            edge.label = newLabel;
+                            edge.note = newLabel;
+                            self.saveGraph();
+                            self.renderGraph();
+                        });
+                    });
+                    // 回车保存
+                    this.nodeRelationsList.querySelectorAll('.rel-edit-input').forEach(function(input) {
+                        input.addEventListener('keydown', function(ev) {
+                            if (ev.key === 'Enter') {
+                                ev.preventDefault();
+                                var edgeId = input.dataset.edgeId;
+                                var btn = self.nodeRelationsList.querySelector('.rel-edit-btn[data-edge-id="' + edgeId + '"]');
+                                if (btn) btn.click();
+                            }
+                        });
+                    });
+                    // 删除
+                    this.nodeRelationsList.querySelectorAll('.rel-delete-btn').forEach(function(btn) {
+                        btn.addEventListener('click', function() {
+                            var edgeId = btn.dataset.edgeId;
+                            self.edges = self.edges.filter(function(e) { return e.id !== edgeId; });
+                            self.saveGraph();
+                            self.renderGraph();
+                            self.renderNodeRelations(nodeId);
+                        });
+                    });
+                }
+            }
+
+            /**
              * 将当前以中心节点为视角的关系图谱导出到生长线编辑
              */
             editInGrowthGraph() {
@@ -1640,48 +1735,32 @@
                         url.indexOf('youtu.be') >= 0) return 'video';
                     return 'video';
                 }
-                // 收集所有与中心节点相关的节点（不仅限于当前可见的节点）
-                var relatedNodeIds = new Set();
-                relatedNodeIds.add(centerId);
-                // 遍历所有边，找出与中心节点直接或间接关联的节点
-                var changed = true;
-                var maxIter = 3; // 最多迭代 3 轮（中心 -> 一级关联 -> 二级关联）
-                while (changed && maxIter > 0) {
-                    changed = false;
-                    maxIter--;
-                    for (var i = 0; i < this.edges.length; i++) {
-                        var e = this.edges[i];
-                        if (relatedNodeIds.has(e.source) && !relatedNodeIds.has(e.target)) {
-                            relatedNodeIds.add(e.target);
-                            changed = true;
-                        } else if (relatedNodeIds.has(e.target) && !relatedNodeIds.has(e.source)) {
-                            relatedNodeIds.add(e.source);
-                            changed = true;
-                        }
-                    }
-                }
-                var exportNodes = this.nodes.filter(function(n) {
-                    return relatedNodeIds.has(n.id);
-                }.bind(this));
-                // 为每个节点确定最终类型（优先用 type 字段，缺失时根据 URL 判断）
-                var nodeTypeMap = {};
-                exportNodes.forEach(function(n) {
-                    nodeTypeMap[n.id] = detectType(n);
-                });
-                var exportEdges = this.edges.filter(function(e) {
-                    // 边的两端必须都在导出集合中
-                    if (!relatedNodeIds.has(e.source) || !relatedNodeIds.has(e.target)) return false;
-                    // 过滤跨类型连接：视频仅与视频关联，文章仅与文章关联
-                    var typeS = nodeTypeMap[e.source];
-                    var typeT = nodeTypeMap[e.target];
-                    if (typeS && typeT && typeS !== typeT) return false;
-                    return true;
+
+                // ===== 导出当前可见子图（visibleNodeIds 内的节点 + 它们之间的边）=====
+                var visibleNodes = this.nodes.filter(function(n) {
+                    return this.visibleNodeIds.has(n.id);
                 }.bind(this));
 
-                // 保存到 gg_node_graph_<nodeId>
+                // 确保中心节点在可见集合中
+                if (visibleNodes.length === 0) {
+                    var centerNode = this.nodes.find(function(n) { return n.id === centerId; });
+                    if (centerNode) visibleNodes = [centerNode];
+                }
+
+                var visibleEdges = this.edges.filter(function(e) {
+                    return this.visibleNodeIds.has(e.source) && this.visibleNodeIds.has(e.target);
+                }.bind(this));
+
+                // 为每个节点确定最终类型
+                var nodeTypeMap = {};
+                visibleNodes.forEach(function(n) {
+                    nodeTypeMap[n.id] = detectType(n);
+                });
+
+                // 保存到 gg_node_graph_<nodeId>（始终覆盖保存，保证所见即所得）
                 var data = {
                     centerNodeId: centerId,
-                    nodes: exportNodes.map(function(n) {
+                    nodes: visibleNodes.map(function(n) {
                         return {
                             id: n.id,
                             title: n.title,
@@ -1701,31 +1780,27 @@
                             _addDate: n.addDate || Date.now()
                         };
                     }),
-                    edges: exportEdges.map(function(e) {
+                    edges: visibleEdges.map(function(e) {
                         return {
                             id: e.id,
                             source: e.source,
                             target: e.target,
-                            note: e.label || '',
+                            note: e.label || e.note || '',
                             color: '#6366f1',
                             createdAt: Date.now()
                         };
                     }),
                     savedAt: Date.now()
                 };
-                // 如果已有保存的节点图谱数据（用户可能在生长线中修改过），不覆盖，直接跳转加载
-                var existingKey = 'gg_node_graph_' + centerId;
-                var existingData = null;
-                try { existingData = localStorage.getItem(existingKey); } catch (e) {}
-                if (!existingData) {
-                    // 首次导出：保存关系到 localStorage
-                    try {
-                        localStorage.setItem(existingKey, JSON.stringify(data));
-                    } catch (e) {
-                        console.warn('[editInGrowthGraph] 保存节点图谱到 localStorage 失败（可能超出配额）:', e);
-                        // 即使保存失败也尝试跳转，让生长线从 URL 参数重新构建
-                    }
+
+                // 始终覆盖保存（不再「已存在则不写」），保证所见即所得
+                var key = 'gg_node_graph_' + centerId;
+                try {
+                    localStorage.setItem(key, JSON.stringify(data));
+                } catch (e) {
+                    console.warn('[editInGrowthGraph] 保存节点图谱到 localStorage 失败（可能超出配额）:', e);
                 }
+
                 // 跳转到生长线，带 URL 参数
                 window.location.href = 'growth-graph.html?source=node&nodeId=' + encodeURIComponent(centerId);
             }
@@ -1835,855 +1910,9 @@
                 this.renderGraph();
             }
 
-            async autoScanRelationsSilent() {
-                // 合并数据库节点与当前图中的自定义节点
-                var customNodes = this.nodes.filter(function(n) { return n.isCustom; });
-                await this.loadNodes();
-                // 恢复自定义节点
-                for (var ci = 0; ci < customNodes.length; ci++) {
-                    if (!this.nodes.find(function(n) { return n.id === customNodes[ci].id; })) {
-                        this.nodes.push(customNodes[ci]);
-                    }
-                }
-                const newEdgesCount = await this.performAutoScanAsync();
-                this.renderGraph();
-                return newEdgesCount;
-            }
+            // 自动扫描关联功能已删除
 
-            async autoScanRelations() {
-                // init时已由loadNodes加载最新数据，无需重复加载
-                await this.performAutoScanAsync();
-                this.renderGraph();
-            }
-
-            // ===== 算法配置常量 =====
-            static get SCAN_CONFIG() {
-                return {
-                    minWordLength: 2,       // 少于两个字的不参与扫描
-                    maxDFRatio: 0.3,        // 一个词出现在超过 30% 的节点中，就认为太普遍
-                    minDF: 2,               // 只出现在一个节点里的词，暂时不能形成节点间关系
-                    topN: 50,               // 每个节点最多展示 50 个相关节点
-                    // 人工停用词：出现这些词时直接过滤（不作为关联词）
-                    manualStopWords: ['考据', '赏析', '合集'],
-                    // 人工停用短语：完整匹配时从节点文本中移除
-                    manualStopPhrases: ['考据', '赏析', '合集'],
-                    // 受保护短语：不会被拆分，作为整体参与匹配
-                    protectedPhrases: [
-                        '硬核战双', '硬核战双文字版', '潮声回响',
-                        '战双帕弥什', '战双', '鸣潮',
-                        '原神', '崩坏星穹铁道', '崩坏3',
-                        '明日方舟', '蔚蓝档案', '少女前线',
-                        '碧蓝航线', 'fategrandorder', 'fgo',
-                        '公主连结', 're0', '从零开始的异世界生活',
-                        '物语系列', '魔法少女小圆',
-                        '新世纪福音战士', 'eva'
-                    ]
-                };
-            }
-
-            // ============================================================
-            //  自动扫描关联 —— 完整重构版
-            //  流程：
-            //    1. 收集所有节点的 title / desc / tags
-            //    2. 规范化文本
-            //    3. 统计标签、标题词、描述词的 DF
-            //    4. 对数字后缀词做归一统计
-            //    5. 自动生成 autoStopWords 和 autoStopPhrases
-            //    6. 对每个节点生成 validTokens：
-            //       6.1 移除 autoStopPhrases
-            //       6.2 保护 protectedPhrases
-            //       6.3 长词优先分词
-            //       6.4 过滤 stopWords / autoStopWords
-            //       6.5 过滤短词和纯数字
-            //    7. 用 validTokens 建立倒排索引
-            //    8. 点击节点时查询相关节点
-            //    9. 计算共同词和 score
-            //   10. 去除长词已存在时的短碎片
-            //   11. 只取 TopN
-            //   12. edge.note 只显示最终 commonTokens
-            // ============================================================
-
-            /**
-             * 第 1 步：收集节点的 title / desc / tags，返回原始文本对象
-             * @returns {{ title: string, desc: string, tags: string[] }}
-             */
-            _collectNodeText(node) {
-                var title = (node.title || '').trim();
-                var desc = (node.desc || '').trim();
-                var tags = [];
-                if (node.tags) {
-                    if (Array.isArray(node.tags)) {
-                        tags = node.tags.map(function(t) { return String(t).trim(); }).filter(function(t) { return t; });
-                    } else if (typeof node.tags === 'string') {
-                        tags = node.tags.split(/[,，、\s]+/).map(function(t) { return t.trim(); }).filter(function(t) { return t; });
-                    }
-                }
-                return { title: title, desc: desc, tags: tags };
-            }
-
-            /**
-             * 第 2 步：规范化文本
-             *  - 转小写
-             *  - 全角转半角
-             *  - 去除标点符号（保留中文、英文、数字、空格）
-             *  - 连续空格合并
-             * @param {string} text
-             * @returns {string}
-             */
-            _normalizeText(text) {
-                if (!text) return '';
-                // 全角转半角
-                var result = text.replace(/[\uFF01-\uFF5E]/g, function(ch) {
-                    return String.fromCharCode(ch.charCodeAt(0) - 0xFEE0);
-                });
-                // 转小写
-                result = result.toLowerCase();
-                // 去除非文字数字字符（保留中文、英文、数字、空格）
-                result = result.replace(/[^a-z0-9\u4e00-\u9fff\s]+/g, ' ');
-                // 合并连续空格
-                result = result.replace(/\s+/g, ' ').trim();
-                return result;
-            };
-
-            /**
-             * 将规范化后的文本按空格切分为 token 片段
-             * 英文/数字串作为整体 token
-             * 中文串需要后续长词优先分词
-             * @param {string} normalizedText
-             * @returns {Array<string>}
-             */
-            _splitNormalizedText(normalizedText) {
-                if (!normalizedText) return [];
-                var parts = normalizedText.split(/\s+/);
-                var tokens = [];
-                for (var i = 0; i < parts.length; i++) {
-                    var part = parts[i];
-                    if (!part) continue;
-                    tokens.push(part);
-                }
-                return tokens;
-            }
-
-            /**
-             * 第 3 步：统计 DF（Document Frequency）
-             * 对每个词统计出现在多少个节点中
-             * @param {Array} nodes
-             * @param {Object} nodeTextMap - nodeId -> { title, desc, tags } (规范化后)
-             * @returns {{ dfMap: Object, allTokensByNode: Object }}
-             *   dfMap: word -> 出现的节点数
-             *   allTokensByNode: nodeId -> Set<word> (该节点所有 token)
-             */
-            _computeDF(nodes, nodeTextMap) {
-                var dfMap = {};               // word -> Set<nodeId>
-                var allTokensByNode = {};      // nodeId -> Set<word>
-
-                for (var i = 0; i < nodes.length; i++) {
-                    var node = nodes[i];
-                    var textObj = nodeTextMap[node.id];
-                    if (!textObj) continue;
-
-                    var tokenSet = new Set();
-                    // 处理 title
-                    var titleTokens = this._splitNormalizedText(textObj.title);
-                    for (var ti = 0; ti < titleTokens.length; ti++) {
-                        tokenSet.add(titleTokens[ti]);
-                    }
-                    // 处理 desc
-                    var descTokens = this._splitNormalizedText(textObj.desc);
-                    for (var di = 0; di < descTokens.length; di++) {
-                        tokenSet.add(descTokens[di]);
-                    }
-                    // 处理 tags（每个 tag 整体规范化）
-                    for (var tgi = 0; tgi < textObj.tags.length; tgi++) {
-                        var normTag = this._normalizeText(textObj.tags[tgi]);
-                        if (normTag) {
-                            var tagTokens = this._splitNormalizedText(normTag);
-                            for (var tt = 0; tt < tagTokens.length; tt++) {
-                                tokenSet.add(tagTokens[tt]);
-                            }
-                        }
-                    }
-
-                    allTokensByNode[node.id] = tokenSet;
-
-                    // 累加 DF
-                    tokenSet.forEach(function(word) {
-                        if (!dfMap[word]) dfMap[word] = new Set();
-                        dfMap[word].add(node.id);
-                    }.bind(this));
-                }
-
-                // 将 Set 转为 count
-                var dfCount = {};
-                for (var w in dfMap) {
-                    if (Object.prototype.hasOwnProperty.call(dfMap, w)) {
-                        dfCount[w] = dfMap[w].size;
-                    }
-                }
-
-                return { dfMap: dfCount, allTokensByNode: allTokensByNode };
-            }
-
-            /**
-             * 第 4 步：对数字后缀词做归一统计
-             * 例如 "战双1"、"战双2"、"战双3" 归一为 "战双"
-             * 将数字后缀的变体合并到基础词上，DF 取最大值
-             * @param {Object} dfMap - word -> count
-             * @returns {{ mergedDF: Object, suffixMap: Object }}
-             *   mergedDF: 归一后的 word -> count
-             *   suffixMap: 原始词 -> 归一词（用于后续 token 归一）
-             */
-            _mergeNumericSuffixes(dfMap) {
-                var mergedDF = {};
-                var suffixMap = {};   // 原始词 -> 归一词
-                var baseWords = {};   // 归一词 -> 累计 DF
-
-                // 第一遍：识别数字后缀词
-                var numericSuffixRe = /^(.+?)(\d+)$/;
-                for (var w in dfMap) {
-                    if (!Object.prototype.hasOwnProperty.call(dfMap, w)) continue;
-                    var match = w.match(numericSuffixRe);
-                    if (match) {
-                        var base = match[1];
-                        // 只有当 base 本身长度 >= 2 时才归一（避免单字+数字）
-                        if (base.length >= 2) {
-                            suffixMap[w] = base;
-                            if (!baseWords[base]) baseWords[base] = 0;
-                            baseWords[base] = Math.max(baseWords[base], dfMap[w]);
-                            // 同时保留 base 本身如果存在
-                            if (dfMap[base]) {
-                                baseWords[base] = Math.max(baseWords[base], dfMap[base]);
-                            }
-                            continue;
-                        }
-                    }
-                    // 非数字后缀词
-                    suffixMap[w] = w;
-                    mergedDF[w] = dfMap[w];
-                }
-
-                // 合并 baseWords 到 mergedDF
-                for (var b in baseWords) {
-                    if (Object.prototype.hasOwnProperty.call(baseWords, b)) {
-                        mergedDF[b] = baseWords[b];
-                    }
-                }
-
-                return { mergedDF: mergedDF, suffixMap: suffixMap };
-            }
-
-            /**
-             * 第 5 步：自动生成 autoStopWords 和 autoStopPhrases
-             *  - autoStopWords: DF/totalNodes > maxDFRatio 的词（太普遍）
-             *  - autoStopPhrases: 同上，但针对短语（多字词）
-             * @param {Object} dfMap - word -> count
-             * @param {number} totalNodes
-             * @returns {{ autoStopWords: Set, autoStopPhrases: Set }}
-             */
-            _generateAutoStopWords(dfMap, totalNodes) {
-                var cfg = RelationsGraph.SCAN_CONFIG;
-                var autoStopWords = new Set();
-                var autoStopPhrases = new Set();
-
-                if (totalNodes <= 1) return { autoStopWords: autoStopWords, autoStopPhrases: autoStopPhrases };
-
-                for (var w in dfMap) {
-                    if (!Object.prototype.hasOwnProperty.call(dfMap, w)) continue;
-                    var df = dfMap[w];
-                    var ratio = df / totalNodes;
-                    if (ratio > cfg.maxDFRatio) {
-                        autoStopWords.add(w);
-                        // 多字词（>= 3字）同时加入 stopPhrases
-                        if (w.length >= 3) {
-                            autoStopPhrases.add(w);
-                        }
-                    }
-                }
-
-                return { autoStopWords: autoStopWords, autoStopPhrases: autoStopPhrases };
-            }
-
-            /**
-             * 第 6 步：对单个节点生成 validTokens
-             *  6.1 移除 autoStopPhrases（从原始文本中删除这些短语）
-             *  6.2 保护 protectedPhrases（提取出来作为整体 token，不参与滑窗分词）
-             *  6.3 长词优先分词（中文部分按 4字->3字->2字 优先匹配）
-             *  6.4 过滤 stopWords / autoStopWords
-             *  6.5 过滤短词和纯数字
-             * @param {Object} node
-             * @param {Object} ctx - 扫描上下文 { stopWordsSet, stopPhrasesSet, protectedSet, suffixMap }
-             * @returns {Array<string>}
-             */
-            _generateValidTokens(node, ctx) {
-                var cfg = RelationsGraph.SCAN_CONFIG;
-                var textObj = this._collectNodeText(node);
-
-                // 合并所有文本
-                var rawText = textObj.title + ' ' + textObj.desc + ' ' + textObj.tags.join(' ');
-
-                // 规范化
-                var normalized = this._normalizeText(rawText);
-
-                // 6.1 移除 autoStopPhrases 和 manualStopPhrases
-                // 从规范化文本中删除这些短语
-                var allStopPhrases = Array.from(ctx.stopPhrasesSet);
-                // 按长度降序排列，先移除长短语
-                allStopPhrases.sort(function(a, b) { return b.length - a.length; });
-                for (var spi = 0; spi < allStopPhrases.length; spi++) {
-                    var phrase = allStopPhrases[spi];
-                    var normPhrase = this._normalizeText(phrase);
-                    if (normPhrase) {
-                        // 全局替换
-                        normalized = normalized.split(normPhrase).join(' ');
-                    }
-                }
-
-                // 6.2 提取 protectedPhrases
-                // 从规范化文本中找出受保护短语，提取后从文本中移除（避免重复分词）
-                var protectedTokens = [];
-                var protectedList = Array.from(ctx.protectedSet);
-                // 按长度降序排列，优先匹配长短语
-                protectedList.sort(function(a, b) { return b.length - a.length; });
-                for (var pi = 0; pi < protectedList.length; pi++) {
-                    var pPhrase = protectedList[pi];
-                    var normP = this._normalizeText(pPhrase);
-                    if (normP && normalized.indexOf(normP) >= 0) {
-                        protectedTokens.push(normP);
-                        // 从文本中移除（替换为空格，避免粘连）
-                        normalized = normalized.split(normP).join(' ');
-                    }
-                }
-
-                // 6.3 长词优先分词
-                // 对剩余文本按空格切分，对每个中文片段做长词优先匹配
-                var remainingTokens = this._splitNormalizedText(normalized);
-                var segmentedTokens = [];
-                for (var ri = 0; ri < remainingTokens.length; ri++) {
-                    var token = remainingTokens[ri];
-                    if (!token) continue;
-                    // 英文/数字串：整体保留
-                    if (/^[a-z0-9]+$/.test(token)) {
-                        segmentedTokens.push(token);
-                        continue;
-                    }
-                    // 中文片段：长词优先分词
-                    var segs = this._segmentChineseLongFirst(token, ctx);
-                    for (var si = 0; si < segs.length; si++) {
-                        segmentedTokens.push(segs[si]);
-                    }
-                }
-
-                // 合并 protectedTokens 和 segmentedTokens
-                var allTokens = protectedTokens.concat(segmentedTokens);
-
-                // 6.4 过滤 stopWords / autoStopWords / manualStopWords
-                // 6.5 过滤短词和纯数字
-                var validTokens = [];
-                var seenSet = new Set();
-                for (var vi = 0; vi < allTokens.length; vi++) {
-                    var word = allTokens[vi];
-                    // 数字后缀归一
-                    if (ctx.suffixMap && ctx.suffixMap[word]) {
-                        word = ctx.suffixMap[word];
-                    }
-                    // 跳过空
-                    if (!word) continue;
-                    // 跳过停用词
-                    if (ctx.stopWordsSet.has(word)) continue;
-                    // 跳过纯数字
-                    if (/^\d+$/.test(word)) continue;
-                    // 跳过过短词（英文至少 2 字符，中文至少 2 字）
-                    if (/^[a-z]+$/.test(word) && word.length < cfg.minWordLength) continue;
-                    if (/^[\u4e00-\u9fff]+$/.test(word) && word.length < cfg.minWordLength) continue;
-                    // 去重
-                    if (seenSet.has(word)) continue;
-                    seenSet.add(word);
-                    validTokens.push(word);
-                }
-
-                return validTokens;
-            }
-
-            /**
-             * 6.3 辅助：中文长词优先分词
-             * 对纯中文片段，优先匹配 4字、3字，最后 2字
-             * 避免把"硬核战双"拆成"硬核"、"核战"、"战双"
-             * @param {string} chineseText - 纯中文字符串
-             * @param {Object} ctx
-             * @returns {Array<string>}
-             */
-            _segmentChineseLongFirst(chineseText, ctx) {
-                var cfg = RelationsGraph.SCAN_CONFIG;
-                var result = [];
-                var text = chineseText;
-
-                // 按长度从大到小尝试匹配：先 6字、5字、4字、3字、2字
-                // 每次从文本开头尝试匹配指定长度的子串
-                // 如果子串不在停用词集合中，则作为 token 提取
-                var maxLen = Math.min(text.length, 6);
-                var i = 0;
-                while (i < text.length) {
-                    var matched = false;
-                    // 从最长到最短尝试
-                    for (var len = Math.min(maxLen, text.length - i); len >= cfg.minWordLength; len--) {
-                        var substr = text.substr(i, len);
-                        // 跳过停用词
-                        if (ctx.stopWordsSet.has(substr)) continue;
-                        // 检查这个子串是否"值得"作为 token
-                        // 优先长词：如果当前长度 >= 3，直接采用
-                        // 如果长度 === 2，检查是否是某个更长词的碎片（通过 DF 判断）
-                        if (len >= 3) {
-                            result.push(substr);
-                            i += len;
-                            matched = true;
-                            break;
-                        }
-                        // len === 2：作为最后手段
-                        if (len === cfg.minWordLength) {
-                            result.push(substr);
-                            i += len;
-                            matched = true;
-                            break;
-                        }
-                    }
-                    if (!matched) {
-                        // 无法分词，跳过一个字符
-                        i++;
-                    }
-                }
-
-                return result;
-            }
-
-            /**
-             * 第 7 步：用 validTokens 建立倒排索引
-             * @param {Array} nodes
-             * @param {Object} ctx
-             * @returns {{ index: Object, idfMap: Object, nodeTokens: Object }}
-             */
-            _buildValidTokenIndex(nodes, ctx) {
-                var cfg = RelationsGraph.SCAN_CONFIG;
-                var totalNodes = nodes.length;
-                if (totalNodes === 0) return { index: {}, idfMap: {}, nodeTokens: {} };
-
-                var nodeTokens = {};   // nodeId -> [tokens]
-                var index = {};        // token -> Set<nodeId>
-                var dfMap = {};        // token -> count
-
-                for (var i = 0; i < nodes.length; i++) {
-                    var node = nodes[i];
-                    var tokens = this._generateValidTokens(node, ctx);
-                    nodeTokens[node.id] = tokens;
-
-                    for (var ti = 0; ti < tokens.length; ti++) {
-                        var token = tokens[ti];
-                        if (!index[token]) index[token] = new Set();
-                        index[token].add(node.id);
-                    }
-                }
-
-                // 计算 DF 和 IDF
-                var filteredIndex = {};
-                var idfMap = {};
-                for (var w in index) {
-                    if (!Object.prototype.hasOwnProperty.call(index, w)) continue;
-                    var df = index[w].size;
-                    // 过滤普遍词（DF/total > maxDFRatio）和稀有词（DF < minDF）
-                    if (totalNodes > 1 && df / totalNodes > cfg.maxDFRatio) continue;
-                    if (df < cfg.minDF) continue;
-                    // protectedPhrases 不过滤
-                    var isProtected = ctx.protectedSet.has(w);
-                    if (!isProtected && df / totalNodes > cfg.maxDFRatio) continue;
-
-                    filteredIndex[w] = Array.from(index[w]);
-                    idfMap[w] = Math.log(totalNodes / Math.max(df, 1));
-                }
-
-                return { index: filteredIndex, idfMap: idfMap, nodeTokens: nodeTokens };
-            }
-
-            /**
-             * 第 8-12 步：查询相关节点，计算共同词和 score，去除短碎片，取 TopN
-             * @param {Array} nodes
-             * @param {Object} existingPairs
-             * @param {Object} scannedSet
-             * @param {Object} opts
-             * @returns {Array<{source, target, label, score}>}
-             */
-            _scanWithInvertedIndex(nodes, existingPairs, scannedSet, opts) {
-                opts = opts || {};
-                var cfg = RelationsGraph.SCAN_CONFIG;
-                var topN = opts.topN || cfg.topN;
-                var centerNodeId = opts.centerNodeId || null;
-                var knownNodeSet = opts.knownNodeSet || null;
-                var centerSavedAt = opts.centerSavedAt || 0;
-
-                // ===== 前置：构建扫描上下文 =====
-                // 1. 收集所有节点文本
-                var nodeTextMap = {};
-                for (var nti = 0; nti < nodes.length; nti++) {
-                    var nNode = nodes[nti];
-                    var rawText = this._collectNodeText(nNode);
-                    nodeTextMap[nNode.id] = {
-                        title: this._normalizeText(rawText.title),
-                        desc: this._normalizeText(rawText.desc),
-                        tags: rawText.tags.map(function(t) { return t; })  // tags 在 _computeDF 中单独规范化
-                    };
-                }
-
-                // 3. 统计 DF
-                var dfResult = this._computeDF(nodes, nodeTextMap);
-
-                // 4. 数字后缀归一
-                var suffixResult = this._mergeNumericSuffixes(dfResult.dfMap);
-
-                // 5. 自动生成 autoStopWords / autoStopPhrases
-                var autoStopResult = this._generateAutoStopWords(suffixResult.mergedDF, nodes.length);
-
-                // 构建上下文
-                var stopWordsSet = new Set(cfg.manualStopWords);
-                autoStopResult.autoStopWords.forEach(function(w) { stopWordsSet.add(w); });
-
-                var stopPhrasesSet = new Set(cfg.manualStopPhrases);
-                autoStopResult.autoStopPhrases.forEach(function(w) { stopPhrasesSet.add(w); });
-
-                var protectedSet = new Set(cfg.protectedPhrases);
-                // 规范化 protectedPhrases
-                var normProtectedSet = new Set();
-                cfg.protectedPhrases.forEach(function(p) {
-                    normProtectedSet.add(this._normalizeText(p));
-                }.bind(this));
-
-                var ctx = {
-                    stopWordsSet: stopWordsSet,
-                    stopPhrasesSet: stopPhrasesSet,
-                    protectedSet: normProtectedSet,
-                    suffixMap: suffixResult.suffixMap
-                };
-
-                // 7. 构建 validToken 倒排索引
-                var idxResult = this._buildValidTokenIndex(nodes, ctx);
-                var index = idxResult.index;
-                var idfMap = idxResult.idfMap;
-                var nodeTokens = idxResult.nodeTokens;
-
-                // 构建 nodeId -> node 的快速查找表
-                var nodeMap = {};
-                for (var ni = 0; ni < nodes.length; ni++) {
-                    nodeMap[nodes[ni].id] = nodes[ni];
-                }
-
-                // ===== 8-12: 遍历每个节点，查询相关节点 =====
-                var newEdges = [];
-
-                for (var i = 0; i < nodes.length; i++) {
-                    var node = nodes[i];
-                    var tokens = nodeTokens[node.id] || [];
-                    if (tokens.length === 0) continue;
-
-                    // 9. 计算共同词和 score
-                    var scoreMap = {};   // nodeId -> { score, commonTokens: Set }
-                    for (var wi = 0; wi < tokens.length; wi++) {
-                        var token = tokens[wi];
-                        var postings = index[token];
-                        if (!postings) continue;
-                        var idf = idfMap[token] || 1;
-                        for (var pi = 0; pi < postings.length; pi++) {
-                            var otherId = postings[pi];
-                            if (otherId === node.id) continue;
-
-                            var otherNode = nodeMap[otherId];
-                            if (!otherNode) continue;
-                            // 类型过滤：只扫同类型
-                            if (node.type && otherNode.type && node.type !== otherNode.type) continue;
-
-                            // 增量扫描过滤
-                            if (centerNodeId && centerSavedAt > 0) {
-                                var isCenterA = node.id === centerNodeId;
-                                var isCenterB = otherId === centerNodeId;
-                                if (!isCenterA && !isCenterB) continue;
-                                var otherForDate = isCenterA ? otherNode : node;
-                                var otherAddDate = otherForDate.addDate || otherForDate._addDate || 0;
-                                if (otherAddDate <= centerSavedAt) continue;
-                            } else if (knownNodeSet) {
-                                var aIsNew = !knownNodeSet.has(node.id);
-                                var bIsNew = !knownNodeSet.has(otherId);
-                                if (!aIsNew && !bIsNew) continue;
-                            }
-
-                            // 跳过已存在的关系
-                            var pair = node.id + '|' + otherId;
-                            var pairRev = otherId + '|' + node.id;
-                            if (existingPairs.has(pair) || existingPairs.has(pairRev)) continue;
-                            if (scannedSet && (scannedSet.has(pair) || scannedSet.has(pairRev))) continue;
-
-                            if (!scoreMap[otherId]) {
-                                scoreMap[otherId] = { score: 0, commonTokens: [] };
-                            }
-                            // 长词权重更高
-                            var tokenWeight = idf * (token.length >= 3 ? 1.5 : 1.0);
-                            scoreMap[otherId].score += tokenWeight;
-                            if (scoreMap[otherId].commonTokens.indexOf(token) < 0) {
-                                scoreMap[otherId].commonTokens.push(token);
-                            }
-                        }
-                    }
-
-                    // 10. 去除长词已存在时的短碎片
-                    // 如果 commonTokens 中有 "硬核战双"（4字），则移除 "硬核"、"核战"、"战双" 等 2字碎片
-                    for (var oid in scoreMap) {
-                        if (Object.prototype.hasOwnProperty.call(scoreMap, oid)) {
-                            scoreMap[oid].commonTokens = this._removeShortFragments(scoreMap[oid].commonTokens);
-                        }
-                    }
-
-                    // 11. 按分数排序，取 TopN
-                    var scored = [];
-                    for (var oid2 in scoreMap) {
-                        if (Object.prototype.hasOwnProperty.call(scoreMap, oid2)) {
-                            // 只保留有共同词的关系
-                            if (scoreMap[oid2].commonTokens.length === 0) continue;
-                            scored.push({
-                                id: oid2,
-                                score: scoreMap[oid2].score,
-                                commonTokens: scoreMap[oid2].commonTokens
-                            });
-                        }
-                    }
-                    scored.sort(function(a, b) { return b.score - a.score; });
-
-                    var limit = Math.min(topN, scored.length);
-                    for (var si = 0; si < limit; si++) {
-                        var item = scored[si];
-                        var pair2 = node.id + '|' + item.id;
-                        var pairRev2 = item.id + '|' + node.id;
-                        if (existingPairs.has(pair2) || existingPairs.has(pairRev2)) continue;
-
-                        // 12. edge.note 只显示最终 commonTokens
-                        var label = item.commonTokens.slice(0, 5).join('、');
-
-                        newEdges.push({
-                            source: node.id,
-                            target: item.id,
-                            label: label,
-                            score: item.score
-                        });
-                        existingPairs.add(pair2);
-                        existingPairs.add(pairRev2);
-                    }
-                }
-
-                return newEdges;
-            }
-
-            /**
-             * 第 10 步辅助：去除长词已存在时的短碎片
-             * 如果 tokens 中有长词（>= 3字），则检查是否有 2字碎片是该长词的子串
-             * 如果是子串则移除短碎片，避免"硬核战双"已存在时还显示"硬核"、"核战"、"战双"
-             * @param {Array<string>} tokens
-             * @returns {Array<string>}
-             */
-            _removeShortFragments(tokens) {
-                if (!tokens || tokens.length <= 1) return tokens || [];
-                // 按长度降序排列
-                var sorted = tokens.slice().sort(function(a, b) { return b.length - a.length; });
-                var longWords = [];  // >= 3字的词
-                var shortWords = []; // 2字的词
-                for (var i = 0; i < sorted.length; i++) {
-                    if (sorted[i].length >= 3) {
-                        longWords.push(sorted[i]);
-                    } else {
-                        shortWords.push(sorted[i]);
-                    }
-                }
-                // 如果没有长词，直接返回原 tokens
-                if (longWords.length === 0) return tokens;
-                // 过滤短词：如果短词是任一长词的子串，则移除
-                var result = longWords.slice();
-                for (var j = 0; j < shortWords.length; j++) {
-                    var shortW = shortWords[j];
-                    var isFragment = false;
-                    for (var k = 0; k < longWords.length; k++) {
-                        if (longWords[k].indexOf(shortW) >= 0) {
-                            isFragment = true;
-                            break;
-                        }
-                    }
-                    if (!isFragment) {
-                        result.push(shortW);
-                    }
-                }
-                return result;
-            }
-
-            performAutoScan() {
-                var existingPairs = new Set();
-                for (var ei = 0; ei < this.edges.length; ei++) {
-                    var e = this.edges[ei];
-                    existingPairs.add(e.source + '|' + e.target);
-                    existingPairs.add(e.target + '|' + e.source);
-                }
-
-                var newEdges = this._scanWithInvertedIndex(this.nodes, existingPairs, null, {});
-                var newEdgeCount = 0;
-                for (var i = 0; i < newEdges.length; i++) {
-                    var ne = newEdges[i];
-                    this.edges.push({
-                        id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                        source: ne.source,
-                        target: ne.target,
-                        label: ne.label
-                    });
-                    newEdgeCount++;
-                }
-                return newEdgeCount;
-            }
-
-            async performAutoScanAsync() {
-                var cfg = RelationsGraph.SCAN_CONFIG;
-
-                var existingPairs = new Set();
-                for (var ei = 0; ei < this.edges.length; ei++) {
-                    var e = this.edges[ei];
-                    existingPairs.add(e.source + '|' + e.target);
-                    existingPairs.add(e.target + '|' + e.source);
-                }
-
-                // 加载已扫描记录（增量扫描）
-                var scannedKey = 'kb_scannedPairs';
-                var scannedStr = null;
-                try { scannedStr = localStorage.getItem(scannedKey); } catch (e) {}
-                var scannedPairs = scannedStr ? JSON.parse(scannedStr) : {};
-                var scannedSet = new Set(Object.keys(scannedPairs));
-
-                // 加载上次保存图谱时已知的节点ID集合，用于增量扫描
-                var knownNodesKey = 'kb_graphKnownNodeIds';
-                var knownNodesStr = null;
-                try { knownNodesStr = localStorage.getItem(knownNodesKey); } catch (e) {}
-                var knownNodeIds = knownNodesStr ? JSON.parse(knownNodesStr) : null;
-                var knownNodeSet = knownNodeIds ? new Set(knownNodeIds) : null;
-
-                // ===== 生长线增量扫描：加载中心节点已保存的节点图谱 =====
-                var centerSavedAt = 0;
-                var centerNodeGraphData = null;
-                if (this.currentCenterNodeId) {
-                    var nodeGraphRaw = null;
-                    try { nodeGraphRaw = localStorage.getItem('gg_node_graph_' + this.currentCenterNodeId); } catch (e) {}
-                    if (nodeGraphRaw) {
-                        try {
-                            centerNodeGraphData = JSON.parse(nodeGraphRaw);
-                            centerSavedAt = centerNodeGraphData.savedAt || 0;
-                            // 加载已保存的关系到当前 edges（避免重复扫描已确认的关系）
-                            if (centerNodeGraphData.edges && centerNodeGraphData.edges.length > 0) {
-                                for (var gei = 0; gei < centerNodeGraphData.edges.length; gei++) {
-                                    var ge = centerNodeGraphData.edges[gei];
-                                    var gePair = ge.source + '|' + ge.target;
-                                    var gePairRev = ge.target + '|' + ge.source;
-                                    if (!existingPairs.has(gePair) && !existingPairs.has(gePairRev)) {
-                                        this.edges.push({
-                                            id: ge.id || ('edge_gg_' + Date.now() + '_' + gei),
-                                            source: ge.source,
-                                            target: ge.target,
-                                            label: ge.note || ''
-                                        });
-                                        existingPairs.add(gePair);
-                                        existingPairs.add(gePairRev);
-                                    }
-                                }
-                            }
-                        } catch (err) {
-                            console.warn('[增量扫描] 加载节点图谱失败:', err);
-                        }
-                    }
-                }
-
-                // 使用倒排索引算法扫描
-                var newEdges = this._scanWithInvertedIndex(this.nodes, existingPairs, scannedSet, {
-                    centerNodeId: this.currentCenterNodeId || null,
-                    knownNodeSet: knownNodeSet,
-                    centerSavedAt: centerSavedAt,
-                    topN: cfg.topN
-                });
-
-                if (newEdges.length === 0) {
-                    if (centerSavedAt > 0) {
-                        console.log('[增量扫描] 中心节点 ' + this.currentCenterNodeId + ' 已扫描所有新节点');
-                    }
-                    return 0;
-                }
-
-                // 分片异步处理，每片处理后 yield 给 UI 线程
-                var CHUNK = 50;
-                var newCount = 0;
-                for (var ci = 0; ci < newEdges.length; ci += CHUNK) {
-                    var chunk = newEdges.slice(ci, ci + CHUNK);
-                    for (var cj = 0; cj < chunk.length; cj++) {
-                        var c = chunk[cj];
-                        this.edges.push({
-                            id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                            source: c.source,
-                            target: c.target,
-                            label: c.label
-                        });
-                        existingPairs.add(c.source + '|' + c.target);
-                        existingPairs.add(c.target + '|' + c.source);
-                        scannedSet.add(c.source + '|' + c.target);
-                        newCount++;
-                    }
-                    var saveObj = {};
-                    scannedSet.forEach(function(id) { saveObj[id] = 1; });
-                    try {
-                        localStorage.setItem(scannedKey, JSON.stringify(saveObj));
-                    } catch (e) {
-                        console.warn('[performAutoScanAsync] 保存已扫描记录失败（可能超出配额）:', e);
-                    }
-                    await new Promise(function(r) { setTimeout(r, 0); });
-                }
-                return newCount;
-            }
-
-            /**
-             * 保留原有的 detectRelation 方法用于兼容性
-             * 新的自动扫描使用倒排索引算法，不再调用此方法
-             */
-            detectRelation(nodeA, nodeB) {
-                var rawTagsA = nodeA && nodeA.tags;
-                var rawTagsB = nodeB && nodeB.tags;
-                if (!Array.isArray(rawTagsA)) rawTagsA = typeof rawTagsA === 'string' ? rawTagsA.split(',') : [];
-                if (!Array.isArray(rawTagsB)) rawTagsB = typeof rawTagsB === 'string' ? rawTagsB.split(',') : [];
-                var tagsA = rawTagsA.map(function(t) { return String(t).trim(); }).filter(function(t) { return t; });
-                var tagsB = rawTagsB.map(function(t) { return String(t).trim(); }).filter(function(t) { return t; });
-
-                var commonTags = [];
-                for (var ti = 0; ti < tagsA.length; ti++) {
-                    for (var tj = 0; tj < tagsB.length; tj++) {
-                        if (tagsA[ti] === tagsB[tj]) {
-                            commonTags.push(tagsA[ti]);
-                            break;
-                        }
-                    }
-                }
-
-                if (commonTags.length > 0) {
-                    return '共同标签: ' + commonTags.join(', ');
-                }
-
-                var descA = (nodeA.desc || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
-                var descB = (nodeB.desc || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, ' ');
-                var segsA = descA.split(/\s+/).filter(function(w) { return w.length >= 2; });
-                var segsB = descB.split(/\s+/).filter(function(w) { return w.length >= 2; });
-
-                var common = segsA.filter(function(w) { return segsB.indexOf(w) >= 0; });
-                if (common.length >= 2) {
-                    return '描述相关: ' + common.slice(0, 3).join('、');
-                }
-                if (common.length === 1 && common[0].length >= 3) {
-                    return '描述相关: ' + common[0];
-                }
-
-                return null;
-            }
-
+            // 自动扫描关联算法代码已删除
             addRelation() {
                 const sourceId = this.sourceNodeSelect.value;
                 const targetId = this.targetNodeSelect.value;
@@ -2705,6 +1934,7 @@
                 this.relationModal.style.display = 'none';
                 this.relationForm.reset();
                 this.renderGraph();
+                this.renderNodeRelations(sourceId);
 
                 // 自动保存到 IndexedDB，确保手动添加的关系立即持久化
                 this._saveEdgesToIndexedDB();

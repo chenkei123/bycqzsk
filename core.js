@@ -249,8 +249,8 @@ class CoreService {
         }
     }
 
-    async getTagStats() {
-        return await videoDB.getAllTagsWithStats();
+    async getTagStats(field = 'tags') {
+        return await videoDB.getAllTagsWithStats(field);
     }
 
     async isUrlExists(url) {

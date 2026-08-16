@@ -12,6 +12,13 @@ class UIManager {
         this.draggedVideoId = null;
         this.batchMode = false;
         this.selectedVideoIds = new Set();
+        this.batchTagsSelectedIds = new Set(); // 批量添加关键词时选中的链接ID
+        // 关键词双系统
+        this.keywordMode = 'admin'; // 'admin' 或 'user'，在 initialize 中从 localStorage 恢复
+        // 标签云分页/排序
+        this.tagPageSize = 50;
+        this.tagPage = 0;
+        this.tagSort = 'count';
         // 分页相关
         this.currentPage = 1;
         this.PAGE_SIZE = 20;
@@ -37,6 +44,15 @@ class UIManager {
             this.currentTypeFilter = savedType;
             this.syncToggleState(savedType);
         }
+
+        // 恢复关键词模式状态
+        var savedKwMode = localStorage.getItem('kbKeywordMode');
+        if (savedKwMode === 'admin' || savedKwMode === 'user') {
+            this.keywordMode = savedKwMode;
+        } else {
+            this.keywordMode = this.isDeveloper ? 'admin' : 'user';
+        }
+        this.syncKeywordModeUI();
 
         this.loadCategories();
         await this.renderCurrentView();
@@ -338,9 +354,9 @@ class UIManager {
             smartFillBtn: document.getElementById('smart-fill-btn'),
             contentType: document.getElementById('content-type'),
             typeToggle: document.getElementById('type-toggle'),
-            toggleTrack: document.querySelector('.toggle-track'),
-            videoLabel: document.querySelector('.video-label'),
-            articleLabel: document.querySelector('.article-label'),
+            toggleTrack: document.querySelector('.type-toggle .toggle-track'),
+            videoLabel: document.querySelector('.type-toggle .video-label'),
+            articleLabel: document.querySelector('.type-toggle .article-label'),
             
             videoApiUrl: document.getElementById('video-api-url'),
             articleApiUrl: document.getElementById('article-api-url'),
@@ -380,7 +396,31 @@ class UIManager {
             batchSelectAllBtn: document.getElementById('batch-select-all-btn'),
             batchDeselectAllBtn: document.getElementById('batch-deselect-all-btn'),
             batchDeleteBtn: document.getElementById('batch-delete-btn'),
-            batchExitBtn: document.getElementById('batch-exit-btn')
+            batchExitBtn: document.getElementById('batch-exit-btn'),
+
+            // 批量添加关键词相关元素
+            batchAddTagsBtn: document.getElementById('batch-add-tags-btn'),
+            batchTagsModal: document.getElementById('batch-tags-modal'),
+            closeBatchTagsModal: document.getElementById('close-batch-tags-modal'),
+            cancelBatchTags: document.getElementById('cancel-batch-tags'),
+            confirmBatchTags: document.getElementById('confirm-batch-tags'),
+            batchTagsSearch: document.getElementById('batch-tags-search'),
+            batchTagsList: document.getElementById('batch-tags-list'),
+            batchTagsInput: document.getElementById('batch-tags-input'),
+            batchTagsSelectedCount: document.getElementById('batch-tags-selected-count'),
+            batchTagsClearBtn: document.getElementById('batch-tags-clear-btn'),
+
+            // 关键词双系统开关 + 标签云分页/排序
+            kwModeToggle: document.getElementById('kw-mode-toggle'),
+            kwModeTrack: document.getElementById('kw-mode-track'),
+            kwModeLabelAdmin: document.querySelector('.kw-mode-label.label-admin'),
+            kwModeLabelUser: document.querySelector('.kw-mode-label.label-user'),
+            tagCloudToolbar: document.getElementById('tag-cloud-toolbar'),
+            tagTotal: document.getElementById('tag-total'),
+            tagSort: document.getElementById('tag-sort'),
+            tagPageInfo: document.getElementById('tag-page-info'),
+            tagPrev: document.getElementById('tag-prev'),
+            tagNext: document.getElementById('tag-next')
         };
     }
 
@@ -472,6 +512,81 @@ class UIManager {
         if (this.elements.batchExitBtn) {
             this.elements.batchExitBtn.addEventListener('click', () => {
                 this.toggleBatchMode();
+            });
+        }
+
+        // 批量添加关键词
+        if (this.elements.batchAddTagsBtn) {
+            this.elements.batchAddTagsBtn.addEventListener('click', () => {
+                this.showBatchTagsModal();
+            });
+        }
+        if (this.elements.closeBatchTagsModal) {
+            this.elements.closeBatchTagsModal.addEventListener('click', () => {
+                this.hideBatchTagsModal();
+            });
+        }
+        if (this.elements.cancelBatchTags) {
+            this.elements.cancelBatchTags.addEventListener('click', () => {
+                this.hideBatchTagsModal();
+            });
+        }
+        if (this.elements.confirmBatchTags) {
+            this.elements.confirmBatchTags.addEventListener('click', () => {
+                this.confirmBatchAddTags();
+            });
+        }
+        if (this.elements.batchTagsClearBtn) {
+            this.elements.batchTagsClearBtn.addEventListener('click', () => {
+                this.batchTagsSelectedIds.clear();
+                this.renderBatchTagsList();
+                this.updateBatchTagsSelectedCount();
+            });
+        }
+        if (this.elements.batchTagsSearch) {
+            this.elements.batchTagsSearch.addEventListener('input', () => {
+                this.renderBatchTagsList();
+            });
+        }
+
+        // 关键词管理员/用户开关
+        if (this.elements.kwModeTrack) {
+            this.elements.kwModeTrack.addEventListener('click', () => {
+                this.toggleKeywordMode();
+            });
+        }
+        if (this.elements.kwModeLabelAdmin) {
+            this.elements.kwModeLabelAdmin.addEventListener('click', () => {
+                if (this.keywordMode !== 'admin') this.toggleKeywordMode();
+            });
+        }
+        if (this.elements.kwModeLabelUser) {
+            this.elements.kwModeLabelUser.addEventListener('click', () => {
+                if (this.keywordMode !== 'user') this.toggleKeywordMode();
+            });
+        }
+
+        // 标签云排序
+        if (this.elements.tagSort) {
+            this.elements.tagSort.addEventListener('change', () => {
+                this.tagSort = this.elements.tagSort.value;
+                this.tagPage = 0;
+                this.renderTagCloud();
+            });
+        }
+        // 标签云翻页
+        if (this.elements.tagPrev) {
+            this.elements.tagPrev.addEventListener('click', () => {
+                if (this.tagPage > 0) {
+                    this.tagPage--;
+                    this.renderTagCloud();
+                }
+            });
+        }
+        if (this.elements.tagNext) {
+            this.elements.tagNext.addEventListener('click', () => {
+                this.tagPage++;
+                this.renderTagCloud();
             });
         }
 
@@ -633,9 +748,11 @@ class UIManager {
 
         if (mode === MODE.KNOWLEDGE) {
             this.elements.tagCloud.classList.remove('hidden');
+            if (this.elements.tagCloudToolbar) this.elements.tagCloudToolbar.classList.remove('hidden');
             await this.renderTagCloud();
         } else {
             this.elements.tagCloud.classList.add('hidden');
+            if (this.elements.tagCloudToolbar) this.elements.tagCloudToolbar.classList.add('hidden');
         }
 
         await coreService.switchMode(mode);
@@ -1043,8 +1160,31 @@ class UIManager {
         }
         
         let tagsHtml = '';
+        // 管理员关键词（tags）
         if (content.tags && content.tags.length > 0) {
-            tagsHtml = content.tags.map(tag => '<span class="video-tag">' + this.escapeHtml(tag) + '</span>').join('');
+            tagsHtml += content.tags.map(tag => 
+                '<span class="video-tag" data-mode="admin">' + 
+                this.escapeHtml(tag) + 
+                '<span class="tag-source-badge admin">管</span>' +
+                (this.keywordMode === 'admin' && this.isDeveloper ? '<button class="tag-remove-btn" data-tag="' + this.escapeHtml(tag) + '" data-field="tags">×</button>' : '') +
+                '</span>'
+            ).join('');
+        }
+        // 用户关键词（userTags）
+        if (content.userTags && content.userTags.length > 0) {
+            tagsHtml += content.userTags.map(tag => 
+                '<span class="video-tag" data-mode="user">' + 
+                this.escapeHtml(tag) + 
+                '<span class="tag-source-badge user">用</span>' +
+                '<button class="tag-remove-btn" data-tag="' + this.escapeHtml(tag) + '" data-field="userTags">×</button>' +
+                '</span>'
+            ).join('');
+        }
+        // 添加关键词输入框
+        var canAddAdmin = this.keywordMode === 'admin' && this.isDeveloper;
+        var canAddUser = this.keywordMode === 'user' || !this.isDeveloper;
+        if (canAddAdmin || canAddUser) {
+            tagsHtml += '<input type="text" class="card-add-tag-input" placeholder="+关键词" data-video-id="' + content.id + '" data-field="' + (canAddAdmin ? 'tags' : 'userTags') + '">';
         }
         
         let categoryHtml = '';
@@ -1128,6 +1268,37 @@ class UIManager {
                 e.stopPropagation();
                 e.preventDefault();
                 this.showCardCategoryMenu(categoryBtn, content);
+            });
+        }
+
+        // 关键词删除按钮
+        card.querySelectorAll('.tag-remove-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                var tag = btn.dataset.tag;
+                var field = btn.dataset.field;
+                if (!tag || !field) return;
+                this.removeTagFromVideo(content.id, tag, field);
+            });
+        });
+
+        // 添加关键词输入框
+        const addTagInput = card.querySelector('.card-add-tag-input');
+        if (addTagInput) {
+            addTagInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    var newTag = addTagInput.value.trim();
+                    if (!newTag) return;
+                    var field = addTagInput.dataset.field || 'tags';
+                    this.addTagToVideo(content.id, newTag, field);
+                    addTagInput.value = '';
+                }
+            });
+            // 阻止输入框点击冒泡到卡片
+            addTagInput.addEventListener('click', (e) => {
+                e.stopPropagation();
             });
         }
 
@@ -1430,6 +1601,175 @@ class UIManager {
         }
     }
 
+    // ==================== 批量添加关键词 ====================
+
+    async showBatchTagsModal() {
+        if (!this.isDeveloper) {
+            this.showError('您没有权限执行此操作');
+            return;
+        }
+
+        // 重置状态
+        this.batchTagsSelectedIds.clear();
+        if (this.elements.batchTagsSearch) this.elements.batchTagsSearch.value = '';
+        if (this.elements.batchTagsInput) this.elements.batchTagsInput.value = '';
+
+        // 加载所有链接数据
+        this._batchTagsAllVideos = [];
+        try {
+            this._batchTagsAllVideos = await videoDB.getAllVideos();
+        } catch (e) {
+            console.warn('获取视频列表失败:', e);
+        }
+
+        // 如果当前在批量管理模式下且有已选中的链接，预选它们
+        if (this.batchMode && this.selectedVideoIds.size > 0) {
+            this.selectedVideoIds.forEach(id => this.batchTagsSelectedIds.add(id));
+        }
+
+        this.elements.batchTagsModal?.classList.remove('hidden');
+        this.renderBatchTagsList();
+        this.updateBatchTagsSelectedCount();
+    }
+
+    hideBatchTagsModal() {
+        this.elements.batchTagsModal?.classList.add('hidden');
+    }
+
+    updateBatchTagsSelectedCount() {
+        if (this.elements.batchTagsSelectedCount) {
+            this.elements.batchTagsSelectedCount.textContent = this.batchTagsSelectedIds.size;
+        }
+    }
+
+    renderBatchTagsList() {
+        if (!this.elements.batchTagsList) return;
+        var listEl = this.elements.batchTagsList;
+        listEl.innerHTML = '';
+
+        var allVideos = this._batchTagsAllVideos || [];
+        var searchTerm = (this.elements.batchTagsSearch?.value || '').trim().toLowerCase();
+
+        // 搜索过滤
+        var filtered = allVideos;
+        if (searchTerm) {
+            filtered = allVideos.filter(function(v) {
+                return (v.title || '').toLowerCase().indexOf(searchTerm) >= 0 ||
+                       (v.desc || '').toLowerCase().indexOf(searchTerm) >= 0;
+            });
+        }
+
+        if (filtered.length === 0) {
+            listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:14px;">未找到匹配的链接</div>';
+            return;
+        }
+
+        var self = this;
+        filtered.forEach(function(video) {
+            var item = document.createElement('div');
+            var isSelected = self.batchTagsSelectedIds.has(video.id);
+            item.className = 'batch-tags-item' + (isSelected ? ' selected' : '');
+            item.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:4px;border-radius:6px;cursor:pointer;border:2px solid ' + (isSelected ? 'var(--primary-color)' : 'transparent') + ';background:' + (isSelected ? 'rgba(59,130,246,0.08)' : 'var(--bg-secondary)') + ';transition:all 0.15s ease;';
+
+            var typeLabel = video.type === 'article' ? '【文章】' : '【视频】';
+            var coverHtml = video.cover
+                ? '<img src="' + self.escapeHtml(video.cover) + '" style="width:32px;height:32px;border-radius:4px;object-fit:cover;flex-shrink:0;" referrerpolicy="no-referrer" onerror="this.style.display=\'none\'">'
+                : '<div style="width:32px;height:32px;border-radius:4px;background:var(--bg-primary);display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0;">' + (video.type === 'article' ? '文' : '视') + '</div>';
+
+            item.innerHTML = coverHtml +
+                '<div style="flex:1;min-width:0;">' +
+                    '<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + typeLabel + self.escapeHtml(video.title || '无标题') + '</div>' +
+                    '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' + (video.tags && video.tags.length > 0 ? '关键词: ' + video.tags.slice(0, 5).map(function(t) { return self.escapeHtml(t); }).join(', ') : '无关键词') + '</div>' +
+                '</div>' +
+                (isSelected ? '<span style="color:var(--primary-color);font-size:16px;">✓</span>' : '');
+
+            item.addEventListener('click', function() {
+                if (self.batchTagsSelectedIds.has(video.id)) {
+                    self.batchTagsSelectedIds.delete(video.id);
+                } else {
+                    self.batchTagsSelectedIds.add(video.id);
+                }
+                self.renderBatchTagsList();
+                self.updateBatchTagsSelectedCount();
+            });
+
+            listEl.appendChild(item);
+        });
+    }
+
+    async confirmBatchAddTags() {
+        if (this.batchTagsSelectedIds.size === 0) {
+            this.showError('请先选择要添加关键词的链接');
+            return;
+        }
+
+        var tagsStr = this.elements.batchTagsInput?.value || '';
+        var newTags = tagsStr.split(/[,\n，、\s]+/).map(function(t) { return t.trim(); }).filter(function(t) { return t; });
+
+        if (newTags.length === 0) {
+            this.showError('请输入至少一个关键词');
+            return;
+        }
+
+        this.showLoading('正在批量添加关键词...');
+
+        var successCount = 0;
+        var failCount = 0;
+        var self = this;
+
+        try {
+            // 一次性获取所有视频，建立 id -> video 映射
+            var allVideos = await videoDB.getAllVideos();
+            var videoMap = {};
+            allVideos.forEach(function(v) { videoMap[v.id] = v; });
+
+            for (const videoId of this.batchTagsSelectedIds) {
+                try {
+                    var video = videoMap[videoId];
+                    if (!video) {
+                        failCount++;
+                        continue;
+                    }
+
+                    // 根据关键词模式选择写入字段
+                    var targetField = (self.keywordMode === 'admin' && self.isDeveloper) ? 'tags' : 'userTags';
+
+                    // 合并关键词（去重）
+                    var existingTags = Array.isArray(video[targetField]) ? video[targetField].slice() : [];
+                    for (var ti = 0; ti < newTags.length; ti++) {
+                        if (existingTags.indexOf(newTags[ti]) < 0) {
+                            existingTags.push(newTags[ti]);
+                        }
+                    }
+
+                    // 更新数据库
+                    var updateData = {};
+                    updateData[targetField] = existingTags;
+                    await coreService.updateVideo(videoId, updateData);
+                    successCount++;
+                } catch (e) {
+                    console.error('添加关键词失败:', videoId, e);
+                    failCount++;
+                }
+            }
+
+            if (failCount === 0) {
+                this.showSuccess('成功为 ' + successCount + ' 个链接添加关键词');
+            } else {
+                this.showError('添加完成：成功 ' + successCount + ' 个，失败 ' + failCount + ' 个');
+            }
+
+            this.hideBatchTagsModal();
+            // 刷新视图
+            await this.renderCurrentView();
+        } catch (error) {
+            console.error('批量添加关键词失败:', error);
+            this.showError('批量添加关键词失败，请重试');
+        } finally {
+            this.hideLoading();
+        }
+    }
+
     renderEmptyState() {
         const emptyState = document.createElement('div');
         emptyState.className = 'empty-state';
@@ -1437,69 +1777,248 @@ class UIManager {
         this.elements.contentContainer.appendChild(emptyState);
     }
 
+    // ==================== 关键词双系统 + 点赞 ====================
+
+    syncKeywordModeUI() {
+        if (!this.elements.kwModeTrack) return;
+        if (this.keywordMode === 'user') {
+            this.elements.kwModeTrack.classList.add('active');
+            this.elements.kwModeLabelAdmin?.classList.remove('active');
+            this.elements.kwModeLabelUser?.classList.add('active');
+        } else {
+            this.elements.kwModeTrack.classList.remove('active');
+            this.elements.kwModeLabelAdmin?.classList.add('active');
+            this.elements.kwModeLabelUser?.classList.remove('active');
+        }
+    }
+
+    toggleKeywordMode() {
+        var newMode = this.keywordMode === 'admin' ? 'user' : 'admin';
+        // 非开发者切到管理员侧 → 提示无权限
+        if (newMode === 'admin' && !this.isDeveloper) {
+            this.showError('您没有管理员权限，请切换到用户模式');
+            return;
+        }
+        this.keywordMode = newMode;
+        localStorage.setItem('kbKeywordMode', newMode);
+        this.syncKeywordModeUI();
+        // 重新渲染标签云和卡片视图
+        if (coreService.currentMode === MODE.KNOWLEDGE) {
+            this.renderTagCloud();
+        }
+        this.renderCurrentView();
+    }
+
+    formatLikeCount(n) {
+        if (n < 10000) return String(n);
+        var w = n / 10000;
+        // 最多1位小数，去尾随 .0
+        var str = w.toFixed(1);
+        if (str.endsWith('.0')) str = str.substring(0, str.length - 2);
+        return str + 'w';
+    }
+
+    async handleLike(btn, likeId, countEl) {
+        // 防抖/已点检查
+        if (btn.disabled || btn.dataset.lock === '1') return;
+        btn.disabled = true;
+        btn.dataset.lock = '1';
+        try {
+            var rec = await videoDB.getLike(likeId);
+            if (!rec) rec = { id: likeId, count: 0, liked: false };
+            if (rec.liked) {
+                // 已点赞，保持禁用
+                if (countEl) countEl.textContent = this.formatLikeCount(rec.count);
+                return;
+            }
+            rec.count += 1;
+            rec.liked = true;
+            await videoDB.putLike(rec);
+            if (countEl) countEl.textContent = this.formatLikeCount(rec.count);
+        } catch (e) {
+            console.error('点赞失败:', e);
+            btn.disabled = false;
+            btn.dataset.lock = '0';
+            this.showError('点赞失败，请重试');
+        }
+    }
+
     async renderTagCloud() {
-        const tagStats = await coreService.getTagStats();
+        var field = this.keywordMode === 'admin' ? 'tags' : 'userTags';
+        var mode = this.keywordMode;
+        const tagStats = await coreService.getTagStats(field);
         this.currentTagStats = tagStats;
 
         this.elements.tagCloud.innerHTML = '';
 
-        Object.entries(tagStats).forEach(([tag, stats]) => {
+        // 转为数组便于排序和分页
+        var tagList = Object.entries(tagStats).map(function(entry) {
+            return { tag: entry[0], stats: entry[1] };
+        });
+
+        // 更新总数
+        if (this.elements.tagTotal) {
+            this.elements.tagTotal.textContent = tagList.length;
+        }
+
+        if (tagList.length === 0) {
+            this.elements.tagCloud.innerHTML = '<span style="color:var(--text-muted);font-size:14px;">暂无关键词</span>';
+            this._updateTagPageInfo(0, 0);
+            return;
+        }
+
+        // 排序
+        var self = this;
+        if (this.tagSort === 'likes') {
+            // 批量获取点赞数
+            var likeIds = tagList.map(function(item) {
+                return 'tl|' + encodeURIComponent(item.tag) + '|' + mode;
+            });
+            var likeMap = {};
+            try {
+                likeMap = await videoDB.getLikes(likeIds);
+            } catch (e) {
+                console.warn('获取标签点赞数据失败:', e);
+            }
+            tagList.forEach(function(item) {
+                var lid = 'tl|' + encodeURIComponent(item.tag) + '|' + mode;
+                item.likeCount = likeMap[lid] ? likeMap[lid].count : 0;
+            });
+            tagList.sort(function(a, b) { return b.likeCount - a.likeCount; });
+        } else {
+            tagList.sort(function(a, b) { return b.stats.count - a.stats.count; });
+        }
+
+        // 分页
+        var totalPages = Math.ceil(tagList.length / this.tagPageSize);
+        if (this.tagPage >= totalPages) this.tagPage = totalPages - 1;
+        if (this.tagPage < 0) this.tagPage = 0;
+        var startIdx = this.tagPage * this.tagPageSize;
+        var pageItems = tagList.slice(startIdx, startIdx + this.tagPageSize);
+
+        // 更新分页信息
+        this._updateTagPageInfo(this.tagPage + 1, totalPages);
+
+        // 批量获取本页点赞数据（用于初始化按钮状态）
+        var pageLikeIds = pageItems.map(function(item) {
+            return 'tl|' + encodeURIComponent(item.tag) + '|' + mode;
+        });
+        var pageLikeMap = {};
+        if (pageLikeIds.length > 0) {
+            try { pageLikeMap = await videoDB.getLikes(pageLikeIds); } catch (e) {}
+        }
+
+        // 渲染每个标签
+        pageItems.forEach(function(item) {
             const tagElement = document.createElement('span');
             tagElement.className = 'tag';
-            // 如果该标签是当前筛选标签，恢复选中状态
-            if (coreService.currentTagFilter === tag) {
+            if (coreService.currentTagFilter === item.tag) {
                 tagElement.classList.add('active');
             }
-            tagElement.textContent = tag;
-            tagElement.innerHTML += '<span class="count">(' + stats.count + ')</span>';
+            // 来源角标
+            var badgeClass = mode === 'admin' ? 'admin' : 'user';
+            var badgeText = mode === 'admin' ? '管' : '用';
+            tagElement.innerHTML = self.escapeHtml(item.tag) +
+                '<span class="tag-source-badge ' + badgeClass + '">' + badgeText + '</span>' +
+                '<span class="count">(' + item.stats.count + ')</span>';
 
-            tagElement.addEventListener('click', async () => {
-                // 如果当前标签已激活，则取消筛选，回到显示全部
-                if (coreService.currentTagFilter === tag) {
+            // 点赞按钮
+            var tlLikeId = 'tl|' + encodeURIComponent(item.tag) + '|' + mode;
+            var tlRec = pageLikeMap[tlLikeId];
+            var tlCount = tlRec ? tlRec.count : 0;
+            var tlLiked = tlRec ? tlRec.liked : false;
+            var likeBtn = document.createElement('button');
+            likeBtn.className = 'tag-like';
+            likeBtn.type = 'button';
+            likeBtn.innerHTML = '👍 <span class="like-count">' + self.formatLikeCount(tlCount) + '</span>';
+            likeBtn.disabled = tlLiked;
+            likeBtn.dataset.lock = tlLiked ? '1' : '0';
+            (function(btn, lid, countEl) {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    self.handleLike(btn, lid, countEl);
+                });
+            })(likeBtn, tlLikeId, likeBtn.querySelector('.like-count'));
+            tagElement.appendChild(likeBtn);
+
+            // 点击标签筛选
+            tagElement.addEventListener('click', async (e) => {
+                // 如果点击的是点赞按钮，不触发筛选
+                if (e.target.closest('.tag-like')) return;
+                if (coreService.currentTagFilter === item.tag) {
                     tagElement.classList.remove('active');
                     coreService.clearTagFilter();
                     await this.renderCurrentView();
                     return;
                 }
-
-                // 切换标签选中状态
-                this.elements.tagCloud.querySelectorAll('.tag').forEach(t => {
-                    t.classList.remove('active');
-                });
+                this.elements.tagCloud.querySelectorAll('.tag').forEach(t => t.classList.remove('active'));
                 tagElement.classList.add('active');
-
-                // 清除分类筛选，避免与标签筛选冲突
                 if (this.currentCategoryFilter) {
                     this.currentCategoryFilter = null;
                     this.categories.forEach(c => {
-                        const el = document.querySelector(`.category-item[data-category-id="${c.id}"]`);
+                        const el = document.querySelector('.category-item[data-category-id="' + c.id + '"]');
                         if (el) el.classList.remove('active');
                     });
                 }
-
-                coreService.setTagFilter(tag);
-                // 重新渲染视图以应用标签筛选
+                coreService.setTagFilter(item.tag);
                 await this.renderCurrentView();
             });
 
-            this.elements.tagCloud.appendChild(tagElement);
+            self.elements.tagCloud.appendChild(tagElement);
         });
+    }
 
-        // 添加折叠/展开切换按钮（默认折叠，仅显示第一行）
-        var tagCount = Object.keys(tagStats).length;
-        if (tagCount > 0) {
-            var toggleBtn = document.createElement('button');
-            toggleBtn.className = 'tag-cloud-toggle';
-            toggleBtn.type = 'button';
-            toggleBtn.textContent = '展开 ▼';
-            toggleBtn.addEventListener('click', function () {
-                var cloud = this.parentElement;
-                cloud.classList.toggle('collapsed');
-                this.textContent = cloud.classList.contains('collapsed') ? '展开 ▼' : '收起 ▲';
-            });
-            this.elements.tagCloud.appendChild(toggleBtn);
-            // 默认折叠
-            this.elements.tagCloud.classList.add('collapsed');
+    _updateTagPageInfo(current, total) {
+        if (this.elements.tagPageInfo) {
+            this.elements.tagPageInfo.textContent = total > 0 ? (current + ' / ' + total) : '';
+        }
+        if (this.elements.tagPrev) {
+            this.elements.tagPrev.disabled = current <= 1;
+        }
+        if (this.elements.tagNext) {
+            this.elements.tagNext.disabled = current >= total;
+        }
+    }
+
+    async addTagToVideo(videoId, tag, field) {
+        try {
+            var allVideos = await videoDB.getAllVideos();
+            var video = allVideos.find(function(v) { return v.id === videoId; });
+            if (!video) {
+                this.showError('未找到该链接');
+                return;
+            }
+            var tags = Array.isArray(video[field]) ? video[field].slice() : [];
+            if (tags.indexOf(tag) >= 0) {
+                this.showError('该关键词已存在');
+                return;
+            }
+            tags.push(tag);
+            var updates = {};
+            updates[field] = tags;
+            await coreService.updateVideo(videoId, updates);
+            this.showSuccess('关键词已添加');
+            await this.renderCurrentView();
+        } catch (e) {
+            console.error('添加关键词失败:', e);
+            this.showError('添加关键词失败');
+        }
+    }
+
+    async removeTagFromVideo(videoId, tag, field) {
+        try {
+            var allVideos = await videoDB.getAllVideos();
+            var video = allVideos.find(function(v) { return v.id === videoId; });
+            if (!video) return;
+            var tags = Array.isArray(video[field]) ? video[field].filter(function(t) { return t !== tag; }) : [];
+            var updates = {};
+            updates[field] = tags;
+            await coreService.updateVideo(videoId, updates);
+            this.showSuccess('关键词已删除');
+            await this.renderCurrentView();
+        } catch (e) {
+            console.error('删除关键词失败:', e);
+            this.showError('删除关键词失败');
         }
     }
 
@@ -2201,8 +2720,16 @@ class UIManager {
             catEl.dataset.categoryId = category.id;
 
             // 分类头部（名称 + 计数 + 删除按钮 + 展开箭头）
+            // 根据当前类型过滤（视频模式只显示视频数量，文章模式只显示文章数量）
+            var filteredCount = category.videoIds.length;
+            if (this.currentTypeFilter) {
+                filteredCount = category.videoIds.filter((vid) => {
+                    var v = videoMap[vid];
+                    return v && v.type === this.currentTypeFilter;
+                }).length;
+            }
             var headerHtml = '<span class="category-name">' + this.escapeHtml(category.name) + '</span>' +
-                '<span class="category-count">(' + category.videoIds.length + ')</span>';
+                '<span class="category-count">(' + filteredCount + ')</span>';
             if (this.isDeveloper) {
                 headerHtml += '<button class="btn-delete-category" data-category-id="' + category.id + '" title="删除分类">×</button>';
             }

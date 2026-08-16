@@ -749,6 +749,16 @@ body {
     opacity: 0.85;
 }
 
+/* 批量添加关键词列表项样式 */
+.batch-tags-item:hover {
+    border-color: var(--primary-color) !important;
+    background: rgba(59, 130, 246, 0.05) !important;
+}
+
+.batch-tags-item.selected:hover {
+    background: rgba(59, 130, 246, 0.12) !important;
+}
+
 /* 批量模式下卡片样式调整 */
 .video-card.timeline .batch-card-check {
     position: absolute;
@@ -2075,4 +2085,198 @@ body {
         padding: 0 12px;
         font-size: 13px;
     }
+}
+
+/* ==================== 关键词双系统 + 点赞 + 分页排序 ==================== */
+
+/* 关键词管理员/用户开关 */
+.kw-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+}
+
+.kw-mode-label {
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.2s;
+}
+
+.kw-mode-label.active {
+    color: var(--primary-color);
+    font-weight: 600;
+}
+
+.kw-toggle-track {
+    width: 36px;
+    height: 18px;
+    border-radius: 9px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.kw-toggle-track.active {
+    background: var(--primary-color);
+}
+
+.kw-toggle-thumb {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.2s;
+}
+
+.kw-toggle-track.active .kw-toggle-thumb {
+    transform: translateX(18px);
+}
+
+/* 标签云工具栏 */
+.tag-cloud-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 8px 0;
+    margin-bottom: 4px;
+}
+
+.tag-toolbar-info {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.tag-toolbar-info b {
+    color: var(--primary-color);
+}
+
+.tag-sort-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.tag-sort-label select {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.tag-page-info {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* 关键词来源角标 */
+.video-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.tag-source-badge {
+    display: inline-block;
+    font-size: 9px;
+    padding: 0 3px;
+    border-radius: 3px;
+    font-weight: 600;
+    line-height: 14px;
+    vertical-align: middle;
+}
+
+.tag-source-badge.admin {
+    background: rgba(59, 130, 246, 0.2);
+    color: var(--primary-color);
+}
+
+.tag-source-badge.user {
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--success-color);
+}
+
+/* 标签云中的来源角标 */
+.tag .tag-source-badge {
+    margin-left: 2px;
+}
+
+/* 点赞按钮 */
+.tag-like {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 0 2px;
+    transition: color 0.15s;
+    vertical-align: middle;
+}
+
+.tag-like:hover:not(:disabled) {
+    color: var(--primary-color);
+}
+
+.tag-like:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.tag-like .like-count {
+    font-size: 10px;
+}
+
+/* 标签云中的点赞按钮 */
+.tag .tag-like {
+    margin-left: 4px;
+    font-size: 12px;
+}
+
+/* 卡片关键词区：用户添加输入 */
+.card-add-tag-input {
+    display: inline-block;
+    width: 80px;
+    font-size: 12px;
+    padding: 2px 6px;
+    border: 1px dashed var(--border-color);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-primary);
+    outline: none;
+}
+
+.card-add-tag-input:focus {
+    border-color: var(--primary-color);
+    border-style: solid;
+}
+
+/* 关键词删除按钮（卡片内） */
+.tag-remove-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 0 2px;
+    line-height: 1;
+    margin-left: 2px;
+}
+
+.tag-remove-btn:hover {
+    color: var(--danger-color, #ef4444);
 }

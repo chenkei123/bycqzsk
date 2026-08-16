@@ -2547,12 +2547,14 @@
      * 保存为总图谱
      */
     TopBar.prototype._saveAsMasterGraph = function () {
+        // 过滤掉自动扫描产生的边（防御性保证落盘无自动边）
+        var cleanEdges = this.store.state.edges.filter(function(e) { return !e._isAuto; });
         var data = {
             nodes: this.store.state.nodes.map(function (n) {
                 // 清理运行时的 parentIds/childIds（可由 edges 重建）
                 return n;
             }),
-            edges: this.store.state.edges,
+            edges: cleanEdges,
             savedAt: Date.now(),
             centerNodeIds: []
         };
@@ -2578,6 +2580,8 @@
         // 深拷贝节点和边数据，确保序列化时不受引用影响
         var nodesCopy = JSON.parse(JSON.stringify(this.store.state.nodes));
         var edgesCopy = JSON.parse(JSON.stringify(this.store.state.edges));
+        // 过滤掉自动扫描产生的边（防御性保证落盘无自动边）
+        edgesCopy = edgesCopy.filter(function(e) { return !e._isAuto; });
         var data = {
             centerNodeId: this._nodeCenterId,
             nodes: nodesCopy,
@@ -2661,6 +2665,9 @@
 
     App.prototype._init = function () {
         var self = this;
+
+        // 一次性清理历史自动扫描关系
+        this._cleanupAutoScanEdges();
 
         // 设置状态提示
         this.statusHint = document.getElementById('gg-status-hint');
@@ -2931,20 +2938,7 @@
                 existingPairs[pairRev] = true;
             }
             
-            // ===== 然后使用倒排索引算法自动扫描补充新关系 =====
-            var scanResult = self._scanWithInvertedIndexForGrowth(nodes, existingPairs);
-            for (var ai = 0; ai < scanResult.length; ai++) {
-                var ne = scanResult[ai];
-                edges.push({
-                    id: 'edge_auto_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6),
-                    source: ne.source,
-                    target: ne.target,
-                    note: ne.label,
-                    color: EDGE_COLOR_PRESETS[0],
-                    createdAt: Date.now(),
-                    _isAuto: true
-                });
-            }
+            // ===== 自动扫描已停用：仅保留手动关系 =====
             // 设置到画布
             self.store.state.nodes = nodes;
             self.store.state.edges = edges;
@@ -2970,6 +2964,60 @@
             self.topBar._dataSource = 'local';
             self.topBar._updateDataSourceUI();
         });
+    };
+
+    /**
+     * 一次性清理历史自动扫描关系（_isAuto 边）
+     * 遍历 localStorage 中的 gg_master_graph 和 gg_node_graph_* 键，
+     * 解析后过滤掉 _isAuto 为 true 的边，回写。
+     * 使用 localStorage['kb_autoscan_cleaned_v1'] 做一次性守卫。
+     */
+    App.prototype._cleanupAutoScanEdges = function () {
+        var guardKey = 'kb_autoscan_cleaned_v1';
+        try {
+            if (localStorage.getItem(guardKey)) return; // 已清理过
+        } catch (e) { return; }
+
+        var keysToClean = [];
+        try {
+            for (var i = 0; i < localStorage.length; i++) {
+                var key = localStorage.key(i);
+                if (key === 'gg_master_graph' || (key && key.indexOf('gg_node_graph_') === 0)) {
+                    keysToClean.push(key);
+                }
+            }
+        } catch (e) {
+            console.warn('[cleanupAutoScan] 遍历 localStorage 失败:', e);
+        }
+
+        var cleanedCount = 0;
+        keysToClean.forEach(function(key) {
+            try {
+                var raw = localStorage.getItem(key);
+                if (!raw) return;
+                var data = JSON.parse(raw);
+                if (data && Array.isArray(data.edges) && data.edges.length > 0) {
+                    var before = data.edges.length;
+                    data.edges = data.edges.filter(function(e) { return e._isAuto !== true; });
+                    var after = data.edges.length;
+                    if (after < before) {
+                        cleanedCount += (before - after);
+                        localStorage.setItem(key, JSON.stringify(data));
+                        console.log('[cleanupAutoScan] 清理 ' + key + '：移除 ' + (before - after) + ' 条自动边');
+                    }
+                }
+            } catch (e) {
+                console.warn('[cleanupAutoScan] 处理 ' + key + ' 失败:', e);
+            }
+        });
+
+        if (cleanedCount > 0) {
+            console.log('[cleanupAutoScan] 共清理 ' + cleanedCount + ' 条历史自动扫描关系');
+        }
+
+        try {
+            localStorage.setItem(guardKey, '1');
+        } catch (e) {}
     };
 
     /**

@@ -20,6 +20,7 @@ class ContentInfo {
         this.cover = data.cover || '';
         this.desc = data.desc || '';
         this.tags = data.tags || [];
+        this.userTags = data.userTags || [];
         this.addDate = data.addDate || Date.now();
         this.updateDate = data.updateDate || Date.now();
     }
@@ -66,6 +67,7 @@ class ContentInfo {
             cover: this.cover,
             desc: this.desc,
             tags: [...this.tags],
+            userTags: [...this.userTags],
             addDate: this.addDate,
             updateDate: this.updateDate
         };

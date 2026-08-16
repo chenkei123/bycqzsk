@@ -3,7 +3,7 @@
 class VideoDatabase {
     constructor() {
         this.dbName = 'VideoKnowledgeDB';
-        this.version = 1;
+        this.version = 2;
         this.db = null;
         this.isInitialized = false;
     }
@@ -60,6 +60,12 @@ class VideoDatabase {
                     }
 
                     console.log('数据库结构升级完成（数据已保留）');
+                }
+
+                // 版本2：新增 likes 存储（点赞数据）
+                if (!db.objectStoreNames.contains('likes')) {
+                    db.createObjectStore('likes', { keyPath: 'id' });
+                    console.log('likes 存储创建完成');
                 }
             };
         });
@@ -302,12 +308,13 @@ class VideoDatabase {
     /**
      * 获取所有标签及其统计
      */
-    async getAllTagsWithStats() {
+    async getAllTagsWithStats(field = 'tags') {
         const allVideos = await this.getAllVideos();
         const tagStats = {};
 
         allVideos.forEach(video => {
-            video.tags.forEach(tag => {
+            const tags = Array.isArray(video[field]) ? video[field] : [];
+            tags.forEach(tag => {
                 if (!tagStats[tag]) {
                     tagStats[tag] = { count: 0, videos: [] };
                 }
@@ -317,6 +324,69 @@ class VideoDatabase {
         });
 
         return tagStats;
+    }
+
+    /**
+     * 保存点赞记录到 IndexedDB
+     */
+    async putLike(like) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['likes'], 'readwrite');
+            const store = transaction.objectStore('likes');
+            const request = store.put(like);
+            request.onsuccess = () => {
+                resolve(like);
+            };
+            request.onerror = () => {
+                console.error('保存点赞记录失败:', request.error);
+                reject(request.error);
+            };
+        });
+    }
+
+    /**
+     * 获取单条点赞记录
+     */
+    async getLike(id) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['likes'], 'readonly');
+            const store = transaction.objectStore('likes');
+            const request = store.get(id);
+            request.onsuccess = () => {
+                resolve(request.result || null);
+            };
+            request.onerror = () => {
+                reject(request.error);
+            };
+        });
+    }
+
+    /**
+     * 批量获取点赞记录
+     */
+    async getLikes(idArray) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['likes'], 'readonly');
+            const store = transaction.objectStore('likes');
+            const results = {};
+            let remaining = idArray.length;
+            if (remaining === 0) { resolve(results); return; }
+            idArray.forEach(id => {
+                const request = store.get(id);
+                request.onsuccess = () => {
+                    if (request.result) results[id] = request.result;
+                    remaining--;
+                    if (remaining === 0) resolve(results);
+                };
+                request.onerror = () => {
+                    remaining--;
+                    if (remaining === 0) resolve(results);
+                };
+            });
+        });
     }
 
     /**
